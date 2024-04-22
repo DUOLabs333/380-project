@@ -1,0 +1,89 @@
+This is a write-up of the claimed security of this chat program.
+
+Let us call the two people that will be communicating with each other Alice and Bob. Collectively, they will be known as the "correspondents". Let Alice be the person starting the server, and Bob be the client. Let us call the malicious actor Mal.
+
+When starting the server, Alice specifies her private and public keys, as well as Bob's public key (she wants to make sure that she's talking with Bob and Bob alone). When starting the client, Bob specifies his private and public keys, as well as Alice's public key (for the same reason as Alice). The private and public keys that are used are RSA keys.
+
+Let's next discuss the threat model that this program is written under: 
+	* We assume that Mal can monitor the traffic between the correspondents;
+
+	* Mal can connect to Alice in a separate connection from Bob (Mal can not connect to Bob, even if she wanted to, as he is only running a client --- Bob can only initiate a connection, not accept one);
+
+	* Mal can send messages bidirectionally on the same connection as the one Alice and Bob are using, essentially impersonating Alice and Bob;
+
+	* Mal is polynomially bounded (ie, the problems that cryptograhic primitives like RSA and Diffie-Hellman are built upon are as hard for Mal as they are for Alice and Bob).
+
+
+
+Next, let's discuss the security goals of `chat`: 
+	* We want to prevent Mal from sending valid arbitrary messages that looked like they were signed by one of the correspondents (validity and ais required, as otherwise, Mal simply could resend existing signed messages) --- this to prevent Mal from impersonating one or both correspondents to each other, potentially tricking them into giving up sensitive information. 
+	
+	* We also want to prevent Mal from using the traffic to learn anything about the keys used or the messages sent (though it is still possible that Mal can learn something about the keys through some method outside of monitoring `chat` traffic, like Bob accidentally leaking his key online). 
+
+One goal this program does NOT have is preventing Mal from preventing the correspondents from successfully communicating to each other --- this is impossible, as Mal can simply corrupt any message sent. Another goal this program does NOT have is being IND-CPA secure --- this is actually impossible if one allows for messages of arbitrary length to be sent (to fix this potential issue, in the future, `chat` can be modified to limit the length of any single message and pad out the resulting encryption of the message. To see why arbitrarily long messages prevent IND-CPA security, see this question: https://crypto.stackexchange.com/questions/40255/encryption-scheme-with-arbitrary-length-message).
+
+Now, let's discuss the assumptions the security of `chat` is provided upon: 
+	* We assume that the implementations of the cryptographic primitives by OpenSSL and the professor are correct, secure, and resistant to side-channel attacks;
+
+	* For the 2048-bit RSA or AES encryption schemes, given an arbitrary number of encrypted messages without the corresponding plaintexts, the only way to decrypt an encrypted message is to use the respective private keys;
+
+	* That attempting to decrypt an encrypted message using a key that does not match the key used to encrypt the message will fail in some way that is visible to the caller of the decryption function (however, if this assumption turns out to be false, we can still provide authentication and integrity-checking by appending some kind of MAC (like a hash) to the end of the message before encryption, and checking if the hash is valid for the message obtained after an attempted decryption);
+
+	* Mal does not know the RSA secret keys of any of the correspondents before they initialize a shared secret key (otherwise, since until that point, a correspondent's secret key is the same as their identity; if Mal knows one/both secret keys, there is no difference between her and any of the correspondents).
+
+	* Mal has not compromised any of the correspondents' programs (otherwise, she can just log the messages as they are being received).
+		However, we are not assuming that none of the clients are malicious
+
+With all of that out of the way, let's finally move on to describe the actual protocol used in `chat`:
+	First, the correspondents need to set up and agree on a shared secret key to be used for subsequent messages. This is done using a modified version of the Diffie-Hellman (DH) key exchange protocol:
+	1. Bob sends Alice a plaintext "Hello" message.
+		This tells Alice to disregard anything she was doing at the moment and switch to "setup" mode, as a new conversation is about to take place.
+
+		This is useful when dealing with disconnects (though `chat` does not implement the necessary retrying logic)
+
+	2. Alice generates a random integer `a` and sends to Bob Enc_{PkB}(g^a mod p)
+		Since Alice and Bob are not generating new DH parameters every conversation, but instead will always use the parameters given in the `params` file, we are also implicitly assuming that there there is no backdoor in the parameters provided that would make it easier for Mal to figure out the secret key that will eventually be used.
+
+		Since we are encrypting a value that is of most p, the n used in both Alice's and Bob's private key must be >= p. The other benefit of using RSA encryption is that the encryption length is fixed, which minimized buffer overflows/underflows.
+
+		Similarly, g^x mod p also has a fixed length.
+	
+	3. Bob receives the message, decrypts it to obtain g^a mod p, generates his own random integer b, and sends to Alice Enc_{PkA}(g^a mod p), immediately followed by Enc_{PkA}(g^b mod p)
+		This serves as a method of authentication --- the only way to get g^a mod p is by having SkB.
+	
+	4. Alice receives the messages, decrypts them to obtain g^a mod p and g^b mod p, checks whether the g^a mod p matches, computes sk=((g^b) mod p)^a, and sends Enc_{PkB}(g^b mod p).
+
+	5. Bob receives the messages, decrypts them to obtain g^b mod p, checks whether the g^b mod p matches, computes sk=((g^a) mod p)^b. Now, a secret key has been setup, completing the "setup" phase.
+
+	*NOTE*: If at any time during the setup protocol, any of the checks fail, the correspondent quits immediately (ie, for Alice, it goes back into "listening" mode, and for Bob, the client actually quits).
+
+	*NOTE*: Almost all of this setup can be done by the functions provided in dh.h
+
+	At this point, Alice and Bob are in "message mode", as they will now use the generated secret key to encrypt messages using the AES symmetric scheme.
+
+	Alice and Bob keeps two counters, mine and yours. Both are 64 bits long, and both start at 0.
+		They are used to keep track of how many messages have been sent and recieved. It also acts as a way to prevent replay attacks --- Mal can't send the same message twice as the counter values will no longer match with what the correspondents have.
+
+		This can be implemented using the unsigned long long data type.
+
+		You must be careful when dealing with machines different endians when transmitting and reading integers across a network. Additionally, you must take care to pad the integers.
+
+		Eventually the counters will overflow, and Mal will be able to do a replay attack. However, this is likely not to be a problem for two reasons: one, 2^64 is ~18 quintillion, which is (much) more than the number of messages that are likely to be sent in one session; and two, even if Mal can successfully execute a replay attack, the worst that will happen is that correspondent Y will see a message twice, which is a low-impact vulnerability (especially since it can only happen once every 18 quintillion messages).
+			To reduce the probability of the occurrence of this vulnerability even further, instead of a counter, a random nonce can be used, with each message telling the other correspondent what the next nonce will be (so correspondents don't need to keep track of every single nonce ever sent). To be clear, this idea has the same fundamental issue as the deterministic counter --- limited space for valid values --- however, this would be better, as the nonces would be unpredictable, so Mal would not know when she can successfully execute a replay attack. 
+			An alternative way of lowering the probabilities of replay attacks is by appending a timestamp to the message. With a timestamp, not only does Mal have to get the counter value right, but also the timestamp. The chance of an overflow is still possible, but now highly unlikely --- a correspondent would not only need to send 18 quintillion messages, but 18 quintillion messages per second (as timestamps commonly have second-level granularity), which is almost impossible.
+
+	1. A correspondent X sends Base64(Enc_{sk}(Message||Hash(Message)||mine)), and increments mine.
+		Base64 is used because the length is implicitly encoded as NULL-terminated
+		
+		Hash (likely SHA-256) is used for integrity-checking.
+	
+	2. Correspondent Y recieves the message, decodes and decrypts the message, check the hash and mine against yours. If the message is valid, yours is incremented by one.
+
+	At this point, the process repeats until one of the correspondents disconnects.
+
+	*NOTE*: If at any point during messaging, a check fails, the correspondent silently ignores the message --- if Mal knows that her message caused an error, it is possible that she can use it to figure out something about sk.
+
+An astute observer may notice a potential fatal flaw with this protocol --- since `chat` can send messages of arbitrary length, Mal (or a malicious correspondent) can send a very long message, which will cause the other correspondent to run out of memory trying to hold the entire message.
+	This is an inherent flaw in any messaging protocol that allows for arbitrary-length messages, and this problem can not be fixed.
+
+	The only way to solve this issue is to limit the length of messages. However, since this concern does not affect the security/privacy of the messages themselves, this implementation of `chat` makes no attempt to limit message length. 
