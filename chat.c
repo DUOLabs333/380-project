@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <gtk/gtk.h>
 #include <glib/gunicode.h> /* for utf8 strlen */
 #include <sys/socket.h>
@@ -38,7 +39,7 @@ static void error(const char *msg)
 	exit(EXIT_FAILURE);
 }
 
-int initServerNet(int port)
+int initServerNet(char* hostname, int port)
 {
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
@@ -49,7 +50,7 @@ int initServerNet(int port)
 		error("ERROR opening socket");
 	bzero((char *) &serv_addr, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = INADDR_ANY;
+	serv_addr.sin_addr.s_addr = inet_addr(hostname);
 	serv_addr.sin_port = htons(port);
 	if (bind(listensock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 		error("ERROR on binding");
@@ -106,8 +107,9 @@ static int shutdownNetwork()
 static const char* usage =
 "Usage: %s [OPTIONS]...\n"
 "Secure chat (CCNY computer security project).\n\n"
-"   -c, --connect HOST  Attempt a connection to HOST.\n"
-"   -l, --listen        Listen for new connections.\n"
+"   -c, --client  Start as a client.\n"
+"   -s, --server        Start as a server.\n"
+"   -h, --hostname Hostname to listen/connect on (defaults to 127.0.0.1/localhost)\n"
 "   -p, --port    PORT  Listen or connect on PORT (defaults to 1337).\n"
 "   -h, --help          show this message and exit.\n";
 
@@ -176,6 +178,7 @@ static gboolean shownewmessage(gpointer msg)
 	return 0;
 }
 
+
 int main(int argc, char *argv[])
 {
 	if (init("params") != 0) {
@@ -184,8 +187,9 @@ int main(int argc, char *argv[])
 	}
 	// define long options
 	static struct option long_opts[] = {
-		{"connect",  required_argument, 0, 'c'},
-		{"listen",   no_argument,       0, 'l'},
+		{"client",  no_argument, 0, 'c'},
+		{"server",   no_argument,       0, 's'},
+		{"hostname", required_argument, 0, 'n'}, //'h' was already taken
 		{"port",     required_argument, 0, 'p'},
 		{"help",     no_argument,       0, 'h'},
 		{0,0,0,0}
@@ -194,16 +198,30 @@ int main(int argc, char *argv[])
 	char c;
 	int opt_index = 0;
 	int port = 1337;
-	char hostname[HOST_NAME_MAX+1] = "localhost";
+	char hostname[HOST_NAME_MAX+1] = "";
 	hostname[HOST_NAME_MAX] = 0;
+	
+	// Defaults for the hostname for both the client and server
+	char* client_hostname="localhost";
+	char* server_hostname="127.0.0.1";
 
-	while ((c = getopt_long(argc, argv, "c:lp:h", long_opts, &opt_index)) != -1) {
+	while ((c = getopt_long(argc, argv, "csn:p:h", long_opts, &opt_index)) != (char)(-1)) {
 		switch (c) {
-			case 'c':
-				if (strnlen(optarg,HOST_NAME_MAX))
-					strncpy(hostname,optarg,HOST_NAME_MAX);
+			case 'n':
+				int string_length= strnlen(optarg,HOST_NAME_MAX);
+				if (string_length<=0){
+					error("No hostname was provided!\n"); //Should never happen, but is a nice sanity check
+				}
+
+				if (string_length==HOST_NAME_MAX && optarg[HOST_NAME_MAX]!='\0'){
+					error("Your hostname is too long!\n");
+				}
+				
+				memcpy(hostname,optarg, string_length);
 				break;
-			case 'l':
+			case 'c':
+				break; //Nothing to do here
+			case 's':
 				isclient = 0;
 				break;
 			case 'p':
@@ -222,9 +240,15 @@ int main(int argc, char *argv[])
 	 * you decide to give that a try, this might be of use:
 	 * https://docs.gtk.org/gtk4/func.is_initialized.html */
 	if (isclient) {
+		if (!strcmp(hostname, "")){
+			memcpy(hostname, client_hostname, strlen(client_hostname));
+		}
 		initClientNet(hostname,port);
 	} else {
-		initServerNet(port);
+		if (!strcmp(hostname, "")){
+			memcpy(hostname, server_hostname, strlen(server_hostname));
+		}
+		initServerNet(hostname, port);
 	}
 
 	/* setup GTK... */
