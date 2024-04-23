@@ -22,7 +22,9 @@ static GtkTextBuffer* mbuf; /* message buffer */
 static GtkTextView*  tview; /* view for transcript */
 static GtkTextMark*   mark; /* used for scrolling to end of transcript, etc */
 
-static pthread_t trecv;     /* wait for incoming messagess and post to queue */
+static pthread_t network_thread;     /* wait for incoming messagess and post to queue */
+NetworkStruct args={.port=1337};
+
 void* recvMsg(void*);       /* for trecv */
 
 #define max(a, b)         \
@@ -42,7 +44,7 @@ static void error(const char *msg)
 }
 
 //Don't just accept first one --- once the connection ends (you can check using this: https://stackoverflow.com/a/1795562), accept the next one, and start protocol over
-int initServerNet(char* hostname, int port)
+int initServerNet(void*)
 {
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
@@ -53,24 +55,34 @@ int initServerNet(char* hostname, int port)
 		error("ERROR opening socket");
 	bzero((char *) &serv_addr, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = inet_addr(hostname);
-	serv_addr.sin_port = htons(port);
+	serv_addr.sin_addr.s_addr = inet_addr(args.hostname);
+	serv_addr.sin_port = htons(args.port);
 	if (bind(listensock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 		error("ERROR on binding");
-	fprintf(stderr, "listening on port %i...\n",port);
+
+	char status_string[80]; //Should be long enough --- TCP ports only go up to 65535, and IP addresses have <=15 characters.
+	sprintf(status_string, "Listening on %s:%i...", args.hostname, args.port);
+	send_message(STATUS,status_string);
+
 	listen(listensock,1);
 	socklen_t clilen;
 	struct sockaddr_in  cli_addr;
-	sockfd = accept(listensock, (struct sockaddr *) &cli_addr, &clilen);
-	if (sockfd < 0)
-		error("error on accept");
-	close(listensock);
-	fprintf(stderr, "connection made, starting session...\n");
-	/* at this point, should be able to send/recv on sockfd */
+
+	while(1){
+		sockfd = accept(listensock, (struct sockaddr *) &cli_addr, &clilen);
+		if (sockfd < 0){
+			sprintf(status_string, "Failed to accept connection: %s", strerror(errno)); //While this should work for the English locale, it could possibly not work for international locales (which uses more bytes per character)
+			send_message(STATUS, status_string);
+			continue;
+		}
+		send_message(STATUS, "Connection made, starting session...");
+		serverMain();
+		send_message(STATUS, "Client has disconnected, waiting for another connection...");
+	}
 	return 0;
 }
 
-static int initClientNet(char* hostname, int port)
+static int initClientNet(void*)
 {
 	struct sockaddr_in serv_addr;
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -79,15 +91,27 @@ static int initClientNet(char* hostname, int port)
 		error("ERROR opening socket");
 	server = gethostbyname(hostname);
 	if (server == NULL) {
-		fprintf(stderr,"ERROR, no such host\n");
-		exit(0);
+		error("ERROR, no such host");
 	}
 	bzero((char *) &serv_addr, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
 	memcpy(&serv_addr.sin_addr.s_addr,server->h_addr,server->h_length);
 	serv_addr.sin_port = htons(port);
-	if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0)
-		error("ERROR connecting");
+	
+	char status_string[80];
+	sprintf(status_string, "Connecting to %s:%i...", args.hostname, args.port);
+	send_message(STATUS,status_string);
+
+	while (1){
+		if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0){
+			sprintf(status_string, "Failed to connect: %s", strerror(errno));
+			send_message(STATUS, status_string);
+			continue;
+		}
+		clientMain();
+		send_message(STATUS, "Server has disconnected, trying to connect again...");
+	}
+	
 	/* at this point, should be able to send/recv on sockfd */
 	return 0;
 }
@@ -104,7 +128,7 @@ static int shutdownNetwork()
 	return 0;
 }
 
-/* end network stuff. */
+/* end of network stuff. */
 
 
 static const char* usage =
@@ -185,10 +209,10 @@ static gboolean shownewmessage(gpointer msg)
 	return 0;
 }
 
-void load_key_path(int index, char* argument){
-	int len=strlen(argument);
+void set_key_path(int index, char* fn){
+	int len=strlen(fn);
 	structs[index].keyPath=malloc(len+1);
-	memcpy(structs[index].keyPath, argument, len);
+	memcpy(structs[index].keyPath, fn, len);
 	structs[index].keyPath[len]='\0';
 }
 
@@ -213,28 +237,25 @@ int main(int argc, char *argv[])
 	// process options:
 	char c;
 	int opt_index = 0;
-	int port = 1337;
 	int isgenerate=0;
-	char hostname[HOST_NAME_MAX+1] = "";
-	hostname[HOST_NAME_MAX] = 0;
-	
-	// Defaults for the hostname for both the client and server
-	char* client_hostname="localhost";
-	char* server_hostname="127.0.0.1";
 
+	//char hostname[HOST_NAME_MAX+1] = ""; For NetworkStruct->hostname
+	
 	while ((c = getopt_long(argc, argv, "csn:p:hm:y:g", long_opts, &opt_index)) != (char)(-1)) {
 		switch (c) {
 			case 'n':
 				int len= strnlen(optarg,HOST_NAME_MAX);
 				if (len<=0){
-					error("No hostname was provided!\n"); //Should never happen, but is a nice sanity check
+					fprintf(stderr,"No hostname was provided!\n"); //Should never happen, but is a nice sanity check
+					exit(1);
 				}
 
 				if (len==HOST_NAME_MAX && optarg[HOST_NAME_MAX]!='\0'){
-					error("Your hostname is too long!\n");
+					fprintf(stderr,"Your hostname is too long!\n");
+					exit(1);
 				}
 				
-				memcpy(hostname,optarg, len);
+				memcpy(args.hostname,optarg, len+1);
 				break;
 			case 'c':
 				break; //Nothing to do here
@@ -242,16 +263,16 @@ int main(int argc, char *argv[])
 				isclient = 0;
 				break;
 			case 'p':
-				port = atoi(optarg);
+				args.port = atoi(optarg);
 				break;
 			case 'g':
 				isgenerate=1;
 				break;
 			case 'm':
-				load_key_path(MINE,optarg);
+				set_key_path(MINE,optarg);
 				break;
 			case 'y':
-				load_key_path(YOURS, optarg);
+				set_key_path(YOURS, optarg);
 				break;
 			case 'h':
 				printf(usage,argv[0]);
@@ -267,7 +288,7 @@ int main(int argc, char *argv[])
 	 * https://docs.gtk.org/gtk4/func.is_initialized.html */
 
 	if (isgenerate){
-		rsa_generate_keys(structs[MINE]); //Generates, then saves to self.keyPath
+		rsa_generate_keys(structs[MINE],dh_get_params().p); //Generates, then saves to self.keyPath. Makes sure that n>=dh_p
 		exit(0);
 	}else{
 		rsa_load_keys(structs[MINE],1); //0 is MINE. structs is an array of structs, and 1 indicates load both public and private (0 means only public). Should error at any error.
@@ -314,23 +335,25 @@ int main(int argc, char *argv[])
 	
 	while(!gtk_is_initialized()){ //Wait for GTK to initialize. It's not best practice to busy-loop instead of using some sort of signaling, but I don't care enough to figure that out
 	}
-
+	
+	//Start network thread
+	int ret;
 	if (isclient) {
-		if (!strcmp(hostname, "")){
-			memcpy(hostname, client_hostname, strlen(client_hostname));
+		if (!strcmp(args.hostname, "")){
+			sprintf(args.hostname, "localhost");
 		}
-		initClientNet(hostname,port);
+		ret=pthread_create(&network_thread,0,initClientNet, 0);
 	} else {
 		if (!strcmp(hostname, "")){
-			memcpy(hostname, server_hostname, strlen(server_hostname));
+			sprintf(args.hostname, "127.0.0.1");
 		}
-		initServerNet(hostname, port);
+		ret=pthread_create(&network_thread,0,initServerNet, 0);
 	}
-	/* start receiver thread: */
-	if (pthread_create(&trecv,0,recvMsg,0)) {
-		fprintf(stderr, "Failed to create update thread.\n");
+
+	if (ret){
+		error("Failed to start networking threads.\n");
 	}
-	
+
 	gtk_main();
 
 	shutdownNetwork();
