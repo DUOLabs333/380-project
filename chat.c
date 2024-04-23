@@ -1,4 +1,6 @@
 #include <arpa/inet.h>
+#include <bits/getopt_core.h>
+#include <bits/getopt_ext.h>
 #include <gtk/gtk.h>
 #include <glib/gunicode.h> /* for utf8 strlen */
 #include <sys/socket.h>
@@ -39,6 +41,7 @@ static void error(const char *msg)
 	exit(EXIT_FAILURE);
 }
 
+//Don't just accept first one --- once the connection ends (you can check using this: https://stackoverflow.com/a/1795562), accept the next one, and start protocol over
 int initServerNet(char* hostname, int port)
 {
 	int reuse = 1;
@@ -109,8 +112,11 @@ static const char* usage =
 "Secure chat (CCNY computer security project).\n\n"
 "   -c, --client  Start as a client.\n"
 "   -s, --server        Start as a server.\n"
-"   -h, --hostname Hostname to listen/connect on (defaults to 127.0.0.1/localhost)\n"
+"   -h, --hostname HOSTNAME Hostname to listen/connect on (defaults to 127.0.0.1/localhost).\n"
 "   -p, --port    PORT  Listen or connect on PORT (defaults to 1337).\n"
+"   -m, --mine-keys    PATH Prefix of the path of YOUR keys.\n"
+"   -y, --yours-keys PATH Prefix of the path of THE OTHER PERSON'S keys.\n"
+"   -g, --generate Generate keys, then exit.\n"
 "   -h, --help          show this message and exit.\n";
 
 /* Append message to transcript with optional styling.  NOTE: tagnames, if not
@@ -144,6 +150,7 @@ static void tsappend(char* message, char** tagnames, int ensurenewline)
 	gtk_text_buffer_delete_mark(tbuf,mark);
 }
 
+//Split sendMessage into sendMsg and showMessage. Same thing with recieve
 static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* data */)
 {
 	char* tags[2] = {"self",NULL};
@@ -178,6 +185,12 @@ static gboolean shownewmessage(gpointer msg)
 	return 0;
 }
 
+void load_key_path(int index, char* argument){
+	int len=strlen(argument);
+	structs[index].keyPath=malloc(len+1);
+	memcpy(structs[index].keyPath, argument, len);
+	structs[index].keyPath[len]='\0';
+}
 
 int main(int argc, char *argv[])
 {
@@ -191,6 +204,9 @@ int main(int argc, char *argv[])
 		{"server",   no_argument,       0, 's'},
 		{"hostname", required_argument, 0, 'n'}, //'h' was already taken
 		{"port",     required_argument, 0, 'p'},
+		{"mine-keys", required_argument, 0, 'm'},
+		{"yours-keys", required_argument, 0, 'y'},
+		{"generate", no_argument, 0, 'g'},
 		{"help",     no_argument,       0, 'h'},
 		{0,0,0,0}
 	};
@@ -198,6 +214,7 @@ int main(int argc, char *argv[])
 	char c;
 	int opt_index = 0;
 	int port = 1337;
+	int isgenerate=0;
 	char hostname[HOST_NAME_MAX+1] = "";
 	hostname[HOST_NAME_MAX] = 0;
 	
@@ -205,19 +222,19 @@ int main(int argc, char *argv[])
 	char* client_hostname="localhost";
 	char* server_hostname="127.0.0.1";
 
-	while ((c = getopt_long(argc, argv, "csn:p:h", long_opts, &opt_index)) != (char)(-1)) {
+	while ((c = getopt_long(argc, argv, "csn:p:hm:y:g", long_opts, &opt_index)) != (char)(-1)) {
 		switch (c) {
 			case 'n':
-				int string_length= strnlen(optarg,HOST_NAME_MAX);
-				if (string_length<=0){
+				int len= strnlen(optarg,HOST_NAME_MAX);
+				if (len<=0){
 					error("No hostname was provided!\n"); //Should never happen, but is a nice sanity check
 				}
 
-				if (string_length==HOST_NAME_MAX && optarg[HOST_NAME_MAX]!='\0'){
+				if (len==HOST_NAME_MAX && optarg[HOST_NAME_MAX]!='\0'){
 					error("Your hostname is too long!\n");
 				}
 				
-				memcpy(hostname,optarg, string_length);
+				memcpy(hostname,optarg, len);
 				break;
 			case 'c':
 				break; //Nothing to do here
@@ -226,6 +243,15 @@ int main(int argc, char *argv[])
 				break;
 			case 'p':
 				port = atoi(optarg);
+				break;
+			case 'g':
+				isgenerate=1;
+				break;
+			case 'm':
+				load_key_path(MINE,optarg);
+				break;
+			case 'y':
+				load_key_path(YOURS, optarg);
 				break;
 			case 'h':
 				printf(usage,argv[0]);
@@ -239,16 +265,14 @@ int main(int argc, char *argv[])
 	 * show the messages in the main window instead of stderr/stdout.  If
 	 * you decide to give that a try, this might be of use:
 	 * https://docs.gtk.org/gtk4/func.is_initialized.html */
-	if (isclient) {
-		if (!strcmp(hostname, "")){
-			memcpy(hostname, client_hostname, strlen(client_hostname));
-		}
-		initClientNet(hostname,port);
-	} else {
-		if (!strcmp(hostname, "")){
-			memcpy(hostname, server_hostname, strlen(server_hostname));
-		}
-		initServerNet(hostname, port);
+
+	if (isgenerate){
+		rsa_generate_keys(structs[MINE]); //Generates, then saves to self.keyPath
+		exit(0);
+	}else{
+		rsa_load_keys(structs[MINE],1); //0 is MINE. structs is an array of structs, and 1 indicates load both public and private (0 means only public). Should error at any error.
+		
+		rsa_load_keys(structs[YOURS],0);
 	}
 
 	/* setup GTK... */
@@ -287,12 +311,26 @@ int main(int argc, char *argv[])
 	gtk_text_buffer_create_tag(tbuf,"status","foreground","#657b83","font","italic",NULL);
 	gtk_text_buffer_create_tag(tbuf,"friend","foreground","#6c71c4","font","bold",NULL);
 	gtk_text_buffer_create_tag(tbuf,"self","foreground","#268bd2","font","bold",NULL);
+	
+	while(!gtk_is_initialized()){ //Wait for GTK to initialize. It's not best practice to busy-loop instead of using some sort of signaling, but I don't care enough to figure that out
+	}
 
+	if (isclient) {
+		if (!strcmp(hostname, "")){
+			memcpy(hostname, client_hostname, strlen(client_hostname));
+		}
+		initClientNet(hostname,port);
+	} else {
+		if (!strcmp(hostname, "")){
+			memcpy(hostname, server_hostname, strlen(server_hostname));
+		}
+		initServerNet(hostname, port);
+	}
 	/* start receiver thread: */
 	if (pthread_create(&trecv,0,recvMsg,0)) {
 		fprintf(stderr, "Failed to create update thread.\n");
 	}
-
+	
 	gtk_main();
 
 	shutdownNetwork();
