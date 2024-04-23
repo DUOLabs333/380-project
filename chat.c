@@ -267,6 +267,7 @@ int main(int argc, char *argv[])
 	}
 	mark  = gtk_text_mark_new(NULL,TRUE);
 	window = gtk_builder_get_object(builder,"window");
+	gtk_widget_set_size_request(GTK_WIDGET(window), 400, 400);
 	g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 	transcript = gtk_builder_get_object(builder, "transcript");
 	tview = GTK_TEXT_VIEW(transcript);
