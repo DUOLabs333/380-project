@@ -43,12 +43,19 @@ static void error(const char *msg)
 	exit(EXIT_FAILURE);
 }
 
+#define _CONCAT(a,b) a##b
+#define CONCAT(a,b) _CONCAT(a,b)
+
+#define NEWBUF(name, len) \
+	int CONCAT(name,_buf_len)=len;\
+	char* CONCAT(name,_buf)=malloc(CONCAT(name,_buf_len));\
+	memset(CONCAT(name,_buf),0,CONCAT(name,_buf_len));\
+	pthread_cleanup_push(free, CONCAT(name,_buf));
+
 
 void serverSetup(char* key, int keylen){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
-	int hello_buf_len=4;
-	char* hello_buf=malloc(hello_buf_len);
-	pthread_cleanup_push(free, hello_buf);
-
+	NEWBUF(hello, 4);
+	
 	send_message(STATUS, "Waiting for initial HELLO");
 
 	int ret;
@@ -72,27 +79,21 @@ void serverSetup(char* key, int keylen){ //This is the setup protocol that will 
 	RSA_KEY* yoursRSA=structs[YOURS].key;
 	
 
-	Z2NEWBYTES(g_a, Z2SIZE(dh_params.p)); //Creates new buffer *_buf, along with *_buf_len with size equal to provided size. If the count in mpz_export is smaller, just memset the rest to 0.
-	pthread_cleanup_push(free, g_a_buf);
+	Z2NEWBYTES(g_a, Z2SIZE(dh_params.p)); //Creates new buffer *_buf, along with *_buf_len with size equal to provided size (use NEWBUF).
 
-	int enc_b_buf_len=Z2SIZE(yoursRSA->n); //Every RSA encrypted message is as big as K->n
-	char* enc_b_buf=malloc(enc_b_buf_len);
-	pthread_cleanup_push(free, enc_b_buf);
+
+	NEWBUF(enc_b, Z2SIZE(yoursRSA->n)); //Every RSA encrypted message is as big as K->n
 
 	rsa_encrypt(structs[YOURS].key, g_a_buf, g_a_buf_len, enc_b_buf, enc_b_buf_len); //Enc_{PkB}(g^a mod p)
 
 	sendMsg(enc_b_buf, enc_b_buf_len);
 
-	int enc_a_buf_len=Z2SIZE(mineRSA->n);
-	char* enc_a_buf=malloc(enc_a_buf_len);
-	pthread_cleanup_push(free, enc_a_buf); 
+	NEWBUF(enc_a, Z2SIZE(mineRSA->n));
 
 	recvMsg(enc_a_buf, enc_a_buf_len); //Receive Enc_{PkA}(g^a mod p || g^b mod p)
 	
-
-	int dec_a_buf_len=enc_a_buf_len;
-	char* dec_a_buf=malloc(dec_a_buf_len);
-	pthread_cleanup_push(free, dec_a_buf);
+	
+	NEWBUF(dec_a, enc_a_buf_len);
 
 	rsa_decrypt(structs[MINE].key, enc_a_buf, enc_a_buf_len, dec_a_buf, dec_a_buf_len); //Only copy dec_buflen bytes --- If there's not enough bytes to fill it up, memset to 0
 
@@ -117,9 +118,9 @@ void serverSetup(char* key, int keylen){ //This is the setup protocol that will 
 }
 
 void clientSetup(char* key, int keylen){
-	int hello_buf_len=4;
-	char* hello_buf=malloc(hello_buf_len);
-	pthread_cleanup_push(free, hello_buf);
+
+	NEWBUF(hello, 4);
+	memcpy(hello_buf, "HELLO", 4);
 
 	send_message(STATUS, "Sending initial HELLO");
 
@@ -129,16 +130,12 @@ void clientSetup(char* key, int keylen){
 	
 	RSA_KEY* mineRSA=structs[MINE].key;
 	RSA_KEY* yoursRSA=structs[YOURS].key;
-
-	int enc_b_buf_len=Z2SIZE(mineRSA->n); //Every RSA encrypted message is as big as K->n
-	char* enc_b_buf=malloc(enc_b_buf_len);
-	pthread_cleanup_push(free, enc_b_buf);
+	
+	NEWBUF(enc_b, Z2SIZE(mineRSA->n));
 
 	recvMsg(enc_b_buf,enc_b_buf_len);
 
-	int g_a_buf_len=Z2SIZE(dh_params.p);
-	char* g_a_buf=malloc(g_a_buf_len);
-	pthread_cleanup_push(free, g_a_buf);
+	NEWBUF(g_a, Z2SIZE(dh_params.p));
 
 	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_a_buf,g_a_buf_len);
 
@@ -149,27 +146,20 @@ void clientSetup(char* key, int keylen){
 	send_message(STATUS, "Created yours part for Diffie-Hellman");
 
 	Z2NEWBYTES(g_b); //Creates new buffer *_buf, along with *_buf_len
-	pthread_cleanup_push(free, g_b_buf);
 
-	int g_a_g_b_buf_len=Z2SIZE(yoursRSA->n);
-	char* g_a_g_b_buf=malloc(enc_a_buf_len);
-	pthread_cleanup_push(free, g_a_g_b_buf);
+	NEWBUF(g_a_g_b, Z2SIZE(yoursRSA->n));
 
 	memcpy(g_a_b_buf, g_a_buf, g_a_buf_len);
 	memcpy(g_a_g_b_buf+g_a_buf_len, g_b_buf, g_b_buf_len);
 	
-	int enc_a_buf_len=Z2SIZE(yoursRSA->n);
-	char* enc_a_buf=malloc(enc_a_buf_len);
-	pthread_cleanup_push(free, enc_a_buf);
+	NEWBUF(enc_a, Z2SIZE(yoursRSA->n));
 
 	rsa_encrypt(structs[YOURS].key, g_a_g_b_buf, g_a_g_b_buf_len, enc_a_buf, enc_a_buf_len);
 	sendMsg(enc_a_buf,enc_a_buf_len);
 
 	recvMsg(enc_b_buf, enc_b_buf_len);
 	
-	int g_b_a_buf_len=g_a_buf_len;
-	char* g_b_a_buf=malloc(g_b_a_buf_len);
-	pthread_cleanup_push(free, g_b_a_buf);
+	NEWBUF(g_b_a, g_a_buf_len);
 
 	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
 
@@ -188,14 +178,16 @@ void networkMain(){
 	int keylen=Z2SIZE(dh_params.p)-1; //Just in case Z2SIZE overestimates the amount of bytes (Z2SIZE overapproximates by at most one. See here: https://gmplib.org/manual/Integer-Import-and-Export)
 
 	char* keybuf=malloc(keylen);
-
+	
+	issetup=0;
 	if (isclient){
 		clientSetup(keybuf, keylen);
 	}else{
 		serverSetup(keybuf, keylen);
 	}
 	send_message(STATUS, "Setup successful. Moving to main messaging protocol..."); 
-	messagingProtocol(keybuf, keylen);
+	issetup=1;
+	messagingProtocol(keybuf, keylen); //Instead, have a boolean issetup. If it is 0, just drop the message, else, start doing the actual protocol. Additionally, instead of messagingProtocol, have recieveMessage, which just does recvmsg in a loop, and decrypts. sendMessage should have a lock (I'm not sure whether gtk signals are single-threaded or multi-threaded)
 }
 
 // Start of network-related functions
