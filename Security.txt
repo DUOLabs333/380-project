@@ -48,7 +48,7 @@ With all of that out of the way, let's finally move on to describe the actual pr
 
 		Similarly, g^x mod p also has a fixed length.
 	
-	3. Bob receives the message, decrypts it to obtain g^a mod p, generates his own random integer b, and sends to Alice Enc_{PkA}(g^a mod p), immediately followed by Enc_{PkA}(g^b mod p)
+	3. Bob receives the message, decrypts it to obtain g^a mod p, generates his own random integer b, and sends to Alice Enc_{PkA}(g^a mod p || g^b mod p)
 		This serves as a method of authentication --- the only way to get g^a mod p is by having SkB.
 	
 	4. Alice receives the messages, decrypts them to obtain g^a mod p and g^b mod p, checks whether the g^a mod p matches, computes sk=((g^b) mod p)^a, and sends Enc_{PkB}(g^b mod p).

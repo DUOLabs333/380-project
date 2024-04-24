@@ -43,6 +43,162 @@ static void error(const char *msg)
 	exit(EXIT_FAILURE);
 }
 
+
+void serverSetup(char* key, int keylen){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
+	int hello_buf_len=4;
+	char* hello_buf=malloc(hello_buf_len);
+	pthread_cleanup_push(free, hello_buf);
+
+	send_message(STATUS, "Waiting for initial HELLO");
+
+	int ret;
+	while(1){
+	recvMsg(hello_buf, hello_buf_len); //If recvMsg gets a -1, call pthread_exit() in recvMsg
+	if(strncmp(buf,"HELLO", hello_buf_len)){ //You must get a "HELLO" to continue
+		continue;
+	}
+
+	}
+	
+	send_message(STATUS, "Recieved a HELLO");
+
+	NEWZ(a); //Initialize new mpz_t
+	NEWZ(g_a);
+	dhGen(a, g_a); //Generates a and g^a mod p
+	
+	send_message(STATUS, "Created mine part for Diffie-Hellman");
+
+	RSA_KEY* mineRSA=structs[MINE].key;
+	RSA_KEY* yoursRSA=structs[YOURS].key;
+	
+
+	Z2NEWBYTES(g_a, Z2SIZE(dh_params.p)); //Creates new buffer *_buf, along with *_buf_len with size equal to provided size. If the count in mpz_export is smaller, just memset the rest to 0.
+	pthread_cleanup_push(free, g_a_buf);
+
+	int enc_b_buf_len=Z2SIZE(yoursRSA->n); //Every RSA encrypted message is as big as K->n
+	char* enc_b_buf=malloc(enc_b_buf_len);
+	pthread_cleanup_push(free, enc_b_buf);
+
+	rsa_encrypt(structs[YOURS].key, g_a_buf, g_a_buf_len, enc_b_buf, enc_b_buf_len); //Enc_{PkB}(g^a mod p)
+
+	sendMsg(enc_b_buf, enc_b_buf_len);
+
+	int enc_a_buf_len=Z2SIZE(mineRSA->n);
+	char* enc_a_buf=malloc(enc_a_buf_len);
+	pthread_cleanup_push(free, enc_a_buf); 
+
+	recvMsg(enc_a_buf, enc_a_buf_len); //Receive Enc_{PkA}(g^a mod p || g^b mod p)
+	
+
+	int dec_a_buf_len=enc_a_buf_len;
+	char* dec_a_buf=malloc(dec_a_buf_len);
+	pthread_cleanup_push(free, dec_a_buf);
+
+	rsa_decrypt(structs[MINE].key, enc_a_buf, enc_a_buf_len, dec_a_buf, dec_a_buf_len); //Only copy dec_buflen bytes --- If there's not enough bytes to fill it up, memset to 0
+
+
+	if(memcmp(dec_a_buf,g_a_buf, g_a_buf_len)){
+		send_message(STATUS, "Mine g^a and yours g^a do not match. Disconnecting...");
+		pthread_exit(NULL);
+	}
+
+	NEWZ(g_b);
+	
+	int g_b_buf_len=g_a_buf_len;
+	char* g_b_buf=dec_a_buf+g_a_buf_len;
+	BYTES2Z(g_b_buf, g_b_buf_len, g_b);
+	
+	rsa_encrypt(structs[YOURS].key, g_b_buf, g_b_buf_len, enc_b_buf, enc_b_buf_len); //Enc_{PkB}(g^b mod p)
+
+	sendMsg(enc_b_buf, enc_b_buf_len);
+
+	dhFinal(a, g_a, g_b, keybuf, keylen);
+
+}
+
+void clientSetup(char* key, int keylen){
+	int hello_buf_len=4;
+	char* hello_buf=malloc(hello_buf_len);
+	pthread_cleanup_push(free, hello_buf);
+
+	send_message(STATUS, "Sending initial HELLO");
+
+	sendMsg(hello_buf, hello_buf_len);
+
+	send_message(STATUS, "Recieved a HELLO");
+	
+	RSA_KEY* mineRSA=structs[MINE].key;
+	RSA_KEY* yoursRSA=structs[YOURS].key;
+
+	int enc_b_buf_len=Z2SIZE(mineRSA->n); //Every RSA encrypted message is as big as K->n
+	char* enc_b_buf=malloc(enc_b_buf_len);
+	pthread_cleanup_push(free, enc_b_buf);
+
+	recvMsg(enc_b_buf,enc_b_buf_len);
+
+	int g_a_buf_len=Z2SIZE(dh_params.p);
+	char* g_a_buf=malloc(g_a_buf_len);
+	pthread_cleanup_push(free, g_a_buf);
+
+	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_a_buf,g_a_buf_len);
+
+
+	NEWZ(b);
+	NEWZ(g_b);
+	dhGen(b, g_b);
+	send_message(STATUS, "Created yours part for Diffie-Hellman");
+
+	Z2NEWBYTES(g_b); //Creates new buffer *_buf, along with *_buf_len
+	pthread_cleanup_push(free, g_b_buf);
+
+	int g_a_g_b_buf_len=Z2SIZE(yoursRSA->n);
+	char* g_a_g_b_buf=malloc(enc_a_buf_len);
+	pthread_cleanup_push(free, g_a_g_b_buf);
+
+	memcpy(g_a_b_buf, g_a_buf, g_a_buf_len);
+	memcpy(g_a_g_b_buf+g_a_buf_len, g_b_buf, g_b_buf_len);
+	
+	int enc_a_buf_len=Z2SIZE(yoursRSA->n);
+	char* enc_a_buf=malloc(enc_a_buf_len);
+	pthread_cleanup_push(free, enc_a_buf);
+
+	rsa_encrypt(structs[YOURS].key, g_a_g_b_buf, g_a_g_b_buf_len, enc_a_buf, enc_a_buf_len);
+	sendMsg(enc_a_buf,enc_a_buf_len);
+
+	recvMsg(enc_b_buf, enc_b_buf_len);
+	
+	int g_b_a_buf_len=g_a_buf_len;
+	char* g_b_a_buf=malloc(g_b_a_buf_len);
+	pthread_cleanup_push(free, g_b_a_buf);
+
+	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
+
+	if(memcmp(g_b_a_buf, g_b_buf, g_b_buf_len)){
+		send_message(STATUS, "Mine g^b and yours g^b do not match. Disconnecting...");
+		pthread_exit(NULL);
+	}
+	
+	NEWZ(g_a);
+	BYTES2Z(g_a_buf, g_a_buf_len, g_a);
+	dhFinal(b, g_b, g_a, keybuf, keylen);
+}
+
+
+void networkMain(){
+	int keylen=Z2SIZE(dh_params.p)-1; //Just in case Z2SIZE overestimates the amount of bytes (Z2SIZE overapproximates by at most one. See here: https://gmplib.org/manual/Integer-Import-and-Export)
+
+	char* keybuf=malloc(keylen);
+
+	if (isclient){
+		clientSetup(keybuf, keylen);
+	}else{
+		serverSetup(keybuf, keylen);
+	}
+	send_message(STATUS, "Setup successful. Moving to main messaging protocol..."); 
+	messagingProtocol(keybuf, keylen);
+}
+
+// Start of network-related functions
 //Don't just accept first one --- once the connection ends (you can check using this: https://stackoverflow.com/a/1795562), accept the next one, and start protocol over
 int initServerNet(void*)
 {
@@ -76,7 +232,11 @@ int initServerNet(void*)
 			continue;
 		}
 		send_message(STATUS, "Connection made, starting session...");
-		serverMain();
+
+		pthread_t t;
+		pthread_create(&t, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
+		pthread_join(t, NULL);
+
 		send_message(STATUS, "Client has disconnected, waiting for another connection...");
 	}
 	return 0;
@@ -108,7 +268,11 @@ static int initClientNet(void*)
 			send_message(STATUS, status_string);
 			continue;
 		}
-		clientMain();
+		
+		pthread_t t;
+		pthread_create(&t, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
+		pthread_join(t, NULL);
+
 		send_message(STATUS, "Server has disconnected, trying to connect again...");
 	}
 	
@@ -288,7 +452,7 @@ int main(int argc, char *argv[])
 	 * https://docs.gtk.org/gtk4/func.is_initialized.html */
 
 	if (isgenerate){
-		rsa_generate_keys(structs[MINE],dh_get_params().p); //Generates, then saves to self.keyPath. Makes sure that n>=dh_p
+		rsa_generate_keys(structs[MINE],dh_get_params().p); //Generates, then saves to self.keyPath. Makes sure that len(n)>2*len(dh_p)
 		exit(0);
 	}else{
 		rsa_load_keys(structs[MINE],1); //0 is MINE. structs is an array of structs, and 1 indicates load both public and private (0 means only public). Should error at any error.
