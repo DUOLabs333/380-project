@@ -184,6 +184,53 @@ void clientSetup(char* key, int keylen){
 }
 
 
+<<<<<<< HEAD
+=======
+void reset_setup(void*){
+	issetup=0;
+}
+
+#define HASHLEN 32
+#define NUMLEN 8 //All integer values send/recived are this long
+#define MESSAGELEN 4096 
+
+int PACKETLEN=NUMLEN+MESSAGELEN+HASHLEN+NUMLEN;
+
+INITBUF(packet, PACKETLEN);
+
+INITBUF(send, packet_buf_len);
+
+INITBUF(recv, send_buf_len);
+	
+INITBUF(dec, recv_buf_len);
+	
+INITBUF(hash, HASHLEN);
+
+void recieveMessages(){
+	while(1){
+		recvMsg(recv_buf, recv_buf_len);
+		send_message(STATUS, "Recieved packet...");
+		aes_decrypt(keybuf, keylen, recv_buf, recv_buf_len, dec_buf, dec_buf_len);
+		sha256_hash(dec_buf, dec_buf_len, hash_buf);
+		if(memcmp(dec_buf+NUMLEN+MESSAGELEN, hash_buf, hash_buf_len)){
+			send_message(STATUS, "Hashes do not match...");
+			continue;
+		}
+//send_message has overloads, one without length, and one with. send_message copies into its own buffer
+		if(decodeInt(dec_buf+(dec_buf_len-NUMLEN))!=structs[YOURS].counter){
+			send_message(STATUS, "Counter values do not match");
+			continue;
+		}
+
+		send_message(YOURS, dec_buf+NUMLEN, min(decodeInt(dec_buf), MESSAGELEN));
+		structs[YOURS].counter++;
+		send_message(STATUS, "Message successfully recieved!");
+
+	}
+
+}
+
+>>>>>>> 23c9881ba91d62ca3339a51b82aac37d82f8ffc7
 void networkMain(){
 	int keylen=Z2SIZE(dh_params.p)-1; //Just in case Z2SIZE overestimates the amount of bytes (Z2SIZE overapproximates by at most one. See here: https://gmplib.org/manual/Integer-Import-and-Export)
 
@@ -195,7 +242,12 @@ void networkMain(){
 		serverSetup(keybuf, keylen);
 	}
 	send_message(STATUS, "Setup successful. Moving to main messaging protocol..."); 
+<<<<<<< HEAD
 	messagingProtocol(keybuf, keylen);
+=======
+	issetup=1;
+	recieveMessages();
+>>>>>>> 23c9881ba91d62ca3339a51b82aac37d82f8ffc7
 }
 
 // Start of network-related functions
@@ -233,9 +285,15 @@ int initServerNet(void*)
 		}
 		send_message(STATUS, "Connection made, starting session...");
 
+<<<<<<< HEAD
 		pthread_t t;
 		pthread_create(&t, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
 		pthread_join(t, NULL);
+=======
+
+		pthread_create(&main_network_thread, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
+		pthread_join(main_network_thread, NULL);
+>>>>>>> 23c9881ba91d62ca3339a51b82aac37d82f8ffc7
 
 		send_message(STATUS, "Client has disconnected, waiting for another connection...");
 	}
@@ -269,9 +327,14 @@ static int initClientNet(void*)
 			continue;
 		}
 		
+<<<<<<< HEAD
 		pthread_t t;
 		pthread_create(&t, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
 		pthread_join(t, NULL);
+=======
+		pthread_create(&main_network_thread, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
+		pthread_join(main_network_thread, NULL);
+>>>>>>> 23c9881ba91d62ca3339a51b82aac37d82f8ffc7
 
 		send_message(STATUS, "Server has disconnected, trying to connect again...");
 	}
@@ -302,9 +365,9 @@ static const char* usage =
 "   -s, --server        Start as a server.\n"
 "   -h, --hostname HOSTNAME Hostname to listen/connect on (defaults to 127.0.0.1/localhost).\n"
 "   -p, --port    PORT  Listen or connect on PORT (defaults to 1337).\n"
-"   -m, --mine-keys    PATH Prefix of the path of YOUR keys.\n"
-"   -y, --yours-keys PATH Prefix of the path of THE OTHER PERSON'S keys.\n"
-"   -g, --generate Generate keys, then exit.\n"
+"   -m, --mine-key    PATH Path of YOUR private key.\n"
+"   -y, --yours-key PATH Path of OTHER PERSON'S public.\n"
+"   -g, --generate PATH Generate keys at PATH{,.pub}, then exit.\n"
 "   -h, --help          show this message and exit.\n";
 
 /* Append message to transcript with optional styling.  NOTE: tagnames, if not
@@ -341,6 +404,7 @@ static void tsappend(char* message, char** tagnames, int ensurenewline)
 //Split sendMessage into sendMsg and showMessage. Same thing with recieve
 static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* data */)
 {
+<<<<<<< HEAD
 	char* tags[2] = {"self",NULL};
 	tsappend("me: ",tags,0);
 	GtkTextIter mstart; /* start of message pointer */
@@ -360,6 +424,57 @@ static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* dat
 	/* clear message text and reset focus */
 	gtk_text_buffer_delete(mbuf,&mstart,&mend);
 	gtk_widget_grab_focus(w);
+=======
+
+	pthread_mutex_lock(&send_message_mutex);
+
+	if(!issetup){ //Is not setup so we can't do anything
+		send_message(STATUS, "Protocol is not set up yet...");
+	}else{
+
+		char* tags[2] = {"self",NULL};
+		tsappend("me: ",tags,0);
+
+		GtkTextIter mstart; /* start of message pointer */
+		GtkTextIter mend;   /* end of message pointer */
+		gtk_text_buffer_get_start_iter(mbuf,&mstart);
+		gtk_text_buffer_get_end_iter(mbuf,&mend);
+		char* message = gtk_text_buffer_get_text(mbuf,&mstart,&mend,1);
+		size_t len = g_utf8_strlen(message,-1);
+
+		encodeInt(len, packet_buf); //Encode the length of the message
+		memcpy(packet_buf+NUMLEN, message, min(len, MESSAGELEN)); //Copy the message (however, to avoid overflow, copy at most MESSAGELEN bytes. We are not copying the NUL terminator, though so the other end needs to add it back to display it)
+
+		sha256_hash(packet_buf, NUMLEN+MESSAGELEN, packet_buf+(packet_buf_len-(NUMLEN+HASHLEN))); //Hash the plaintext to ensure (plaintext) integrity
+		encodeInt(structs[MINE].counter, packet_buf+(packet_buf_len-(NUMLEN))); //Encode the message counter
+
+		aes_encrypt(packet_buf, packet_buf_len, send_buf); //Encrypt message
+
+		int ret=sendMsg(send_buf, send_buf_len,1); //Send message. The 1 at the end tells it to return a -1 upon error, instead of a pthread_exit
+
+		if (ret==-1){
+			pthread_cancel(main_network_thread); //Cancel the main network thread.
+			send_message(STATUS, "Message failed to send");
+		}else{
+			tsappend(message,NULL,1);
+			free(message);
+			/* clear message text and reset focus */
+			gtk_text_buffer_delete(mbuf,&mstart,&mend);
+			gtk_widget_grab_focus(w);
+
+			send_message(STATUS, "Message sent successfully!");
+		}
+
+		return;
+
+		/* XXX we should probably do the actual network stuff in a different
+		 * thread and have it call this once the message is actually sent. */
+		ssize_t nbytes;
+		if ((nbytes = send(sockfd,message,len,0)) == -1)
+			error("send failed");
+	}
+	pthread_mutex_unlock(&send_message_mutex);
+>>>>>>> 23c9881ba91d62ca3339a51b82aac37d82f8ffc7
 }
 
 static gboolean shownewmessage(gpointer msg)
@@ -373,12 +488,32 @@ static gboolean shownewmessage(gpointer msg)
 	return 0;
 }
 
-void set_key_path(int index, char* fn){
-	int len=strlen(fn);
-	structs[index].keyPath=malloc(len+1);
-	memcpy(structs[index].keyPath, fn, len);
-	structs[index].keyPath[len]='\0';
+void _strcpy(char** dst, char* src){
+	int len=strlen(src)+1;
+	if (*dst!=NULL){
+		free(*dst);
+		*dst=NULL;
+	}
+	*dst=malloc(len);
+	memcpy(*dst, src, len);
 }
+
+
+static void buf_limit(GtkTextBuffer *buffer, GtkTextIter *location, gchar *text, gint len, gpointer user_data)
+  { //Should limit length of characters you can type in.
+    static int i=1;
+    gint count=gtk_text_buffer_get_char_count(buffer);
+    g_print("%i Chars %i\n", i++, count);
+    if(count>MESSAGELEN)
+      {
+        GtkTextIter offset, end;
+        gtk_text_buffer_get_iter_at_offset(buffer, &offset, 10);
+        gtk_text_buffer_get_end_iter(buffer, &end);
+        g_print("Remove Range %i %i\n", gtk_text_iter_get_offset(&offset), gtk_text_iter_get_offset(&end));
+        gtk_text_buffer_delete(buffer, &offset, &end);
+        gtk_text_iter_assign(location, &offset);
+      }
+  }
 
 int main(int argc, char *argv[])
 {
@@ -401,11 +536,11 @@ int main(int argc, char *argv[])
 	// process options:
 	char c;
 	int opt_index = 0;
-	int isgenerate=0;
+	char* generate=NULL;
 
 	//char hostname[HOST_NAME_MAX+1] = ""; For NetworkStruct->hostname
 	
-	while ((c = getopt_long(argc, argv, "csn:p:hm:y:g", long_opts, &opt_index)) != (char)(-1)) {
+	while ((c = getopt_long(argc, argv, "csn:p:hm:y:g:", long_opts, &opt_index)) != (char)(-1)) {
 		switch (c) {
 			case 'n':
 				int len= strnlen(optarg,HOST_NAME_MAX);
@@ -430,13 +565,13 @@ int main(int argc, char *argv[])
 				args.port = atoi(optarg);
 				break;
 			case 'g':
-				isgenerate=1;
+				_strcpy(&generate, optarg);
 				break;
 			case 'm':
-				set_key_path(MINE,optarg);
+				_strcpy(&(structs[MINE].keyPath), optarg);
 				break;
 			case 'y':
-				set_key_path(YOURS, optarg);
+				_strcpy(&(structs[YOURS].keyPath), optarg);
 				break;
 			case 'h':
 				printf(usage,argv[0]);
@@ -451,11 +586,11 @@ int main(int argc, char *argv[])
 	 * you decide to give that a try, this might be of use:
 	 * https://docs.gtk.org/gtk4/func.is_initialized.html */
 
-	if (isgenerate){
-		rsa_generate_keys(structs[MINE],dh_get_params().p); //Generates, then saves to self.keyPath. Makes sure that len(n)>2*len(dh_p)
+	if (generate!=NULL){
+		rsa_generate_keys(generate,dh_get_params().p); //Generates, then saves to keyPath. Makes sure that len(n)>2*len(dh_p)
 		exit(0);
 	}else{
-		rsa_load_keys(structs[MINE],1); //0 is MINE. structs is an array of structs, and 1 indicates load both public and private (0 means only public). Should error at any error.
+		rsa_load_keys(structs[MINE],1); //MINE=0. structs is an array of structs. 1 indicates load both private (0 means public). Should error at any error.
 		
 		rsa_load_keys(structs[YOURS],0);
 	}
@@ -483,6 +618,7 @@ int main(int argc, char *argv[])
 	message = gtk_builder_get_object(builder, "message");
 	tbuf = gtk_text_view_get_buffer(tview);
 	mbuf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(message));
+	g_signal_connect_after(mbuf, "insert-text", G_CALLBACK(buf_limit), NULL);
 	button = gtk_builder_get_object(builder, "send");
 	g_signal_connect_swapped(button, "clicked", G_CALLBACK(sendMessage), GTK_WIDGET(message));
 	gtk_widget_grab_focus(GTK_WIDGET(message));
