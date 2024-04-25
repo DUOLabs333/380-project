@@ -14,5 +14,7 @@ typedef struct _RSA_KEY
 } RSA_KEY;
 
 int rsa_keyGen(RSA_KEY *K);
-int rsa_encrypt(RSA_KEY *key, const unsigned char *plaintext_buf, int plaintext_len, unsigned char *encrypted_buf, int *encrypted_len);
-int rsa_decrypt(RSA_KEY *key, const unsigned char *encrypted_buf, int encrypted_len, unsigned char *plaintext_buf, int *plaintext_len);
+int rsa_generate_keys(int generate, const char *dh_p);
+int rsa_load_keys(RSA_KEY *key, int private_key);
+int rsa_encrypt(RSA_KEY *key, const unsigned char *plaintext_buf, size_t plaintext_len, unsigned char *encrypted_buf, size_t *encrypted_len);
+int rsa_decrypt(RSA_KEY *key, const unsigned char *encrypted_buf, size_t encrypted_len, unsigned char *plaintext_buf, size_t *plaintext_len);

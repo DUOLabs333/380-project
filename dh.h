@@ -46,6 +46,8 @@ int dh3Final(mpz_t a, mpz_t A, mpz_t x, mpz_t X, mpz_t B, mpz_t Y,
 /** same as dh3Final, but accepts keys instead */
 int dh3Finalk(dhKey* skA, dhKey* skX, dhKey* pkB, dhKey* pkY,
 		unsigned char* keybuf, size_t buflen);
+
+const mpz_t* dh_get_params(char param);
 #ifdef __cplusplus
 }
 #endif

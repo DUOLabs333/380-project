@@ -13,6 +13,8 @@
 #include <getopt.h>
 #include "dh.h"
 #include "keys.h"
+#include "rsa.h"
+#include "aes.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 1024
@@ -22,6 +24,8 @@ static GtkTextBuffer *tbuf; /* transcript buffer */
 static GtkTextBuffer *mbuf; /* message buffer */
 static GtkTextView *tview;	/* view for transcript */
 static GtkTextMark *mark;	/* used for scrolling to end of transcript, etc */
+
+mpz_t a, g_a, b, g_b;
 
 static pthread_t network_thread; /* wait for incoming messagess and post to queue */
 
@@ -286,28 +290,75 @@ size_t Z2BYTES(const mpz_t z, unsigned char *bytes, size_t max_len)
 	return count;
 }
 
-void Z2NEWBYTES(const mpz_t z, size_t size, unsigned char *buf)
-{
-	memset(buf, 0, size);
-	size_t count = 0;
-	unsigned char *temp_buf = (unsigned char *)malloc(size);
-	if (temp_buf == NULL)
-	{
-		fprintf(stderr, "Memory allocation failed in Z2NEWBYTES\n");
-		return;
-	}
+// Declaration of Z2NEWBYTES function
+// Define a default size value for the buffer
+#define DEFAULT_SIZE_VALUE 256 // You can adjust this to the appropriate default size
 
-	mpz_export(temp_buf, &count, 1, 1, 0, 0, z);
-	if (count < size)
+// Original function with default value for size parameter
+#include <stdarg.h>
+
+// Define a default size value for the buffer
+#define DEFAULT_SIZE_VALUE 256 // You can adjust this to the appropriate default size
+
+// Modified function with variable number of arguments
+void Z2NEWBYTES(const mpz_t z, ...)
+{
+	// Initialize variable arguments
+	va_list args;
+	va_start(args, z);
+
+	unsigned char *buf;
+	size_t size;
+
+	// Check if only one argument is provided
+	if (va_arg(args, int) == 0)
 	{
-		memcpy(buf + (size - count), temp_buf, count);
+		// Default size value if only one argument is provided
+		size = DEFAULT_SIZE_VALUE;
 	}
 	else
 	{
-		memcpy(buf, temp_buf + (count - size), size);
+		// Retrieve the size argument
+		size = va_arg(args, size_t);
 	}
 
-	free(temp_buf);
+	// Allocate memory for the buffer
+	buf = (unsigned char *)malloc(size);
+	if (buf == NULL)
+	{
+		// Handle allocation failure
+		fprintf(stderr, "Error: Failed to allocate memory for buffer in Z2NEWBYTES\n");
+		exit(EXIT_FAILURE);
+	}
+
+	// Convert the mpz_t value to bytes and store it in the buffer
+	memset(buf, 0, size); // Clear the buffer first
+	size_t written = 0;
+	mpz_export(buf, &written, 1, 1, 0, 0, z);
+	if (written < size)
+	{
+		memmove(buf + (size - written), buf, written); // Adjust for leading zeros
+		memset(buf, 0, size - written);				   // Zero-fill the rest
+	}
+
+	// Use the buffer for further processing if needed
+	// Remember to free the buffer when done to avoid memory leaks
+	free(buf);
+
+	// Cleanup variable arguments
+	va_end(args);
+}
+
+// Overloaded function with two arguments
+void Z2NEWBYTES(const mpz_t z, size_t size)
+{
+	// Call the function with the provided size value
+	Z2NEWBYTES(z, size);
+}
+
+size_t Z2SIZE(const mpz_t z)
+{
+	return (mpz_sizeinbase(z, 2) + CHAR_BIT - 1) / CHAR_BIT;
 }
 
 int isclient = 1;
@@ -721,9 +772,9 @@ int main(int argc, char *argv[])
 	}
 	else
 	{
-		rsa_load_keys(structs[MINE], 1); // 1 indicates load both private (0 means public). Should error at any error.
+		rsa_load_keys(structs[MINE].key, 1); // 1 indicates load both private (0 means public). Should error at any error.
 
-		rsa_load_keys(structs[YOURS], 0);
+		rsa_load_keys(structs[YOURS].key, 0);
 	}
 
 	/* setup GTK... */
