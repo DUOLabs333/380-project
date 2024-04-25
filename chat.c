@@ -225,6 +225,64 @@ static int shutdownNetwork()
 
 // End of network functions
 
+void sha256_hash(const unsigned char *input, size_t input_len, unsigned char *output)
+{
+	// Initialize context
+	SHA256_CTX sha256_ctx;
+	SHA256_Init(&sha256_ctx);
+
+	// Update context with the input data
+	SHA256_Update(&sha256_ctx, input, input_len);
+
+	// Finalize hash computation
+	SHA256_Final(output, &sha256_ctx);
+}
+
+void BYTES2Z(const unsigned char *bytes, size_t len, mpz_t z)
+{
+	mpz_import(z, len, 1, sizeof(bytes[0]), 0, 0, bytes);
+}
+
+size_t Z2BYTES(const mpz_t z, unsigned char *bytes, size_t max_len)
+{
+	size_t count;
+	mpz_export(bytes, &count, 1, sizeof(bytes[0]), 0, 0, z);
+	return count;
+}
+
+void Z2NEWBYTES(const mpz_t z, size_t size, unsigned char *buf)
+{
+	if (buf == NULL)
+	{
+		fprintf(stderr, "Buffer not allocated in Z2NEWBYTES\n");
+		return;
+	}
+
+	memset(buf, 0, size);
+	size_t count = 0;
+	unsigned char *temp_buf = (unsigned char *)malloc(size);
+
+	if (temp_buf == NULL)
+	{
+		fprintf(stderr, "Memory allocation failed in Z2NEWBYTES\n");
+		return;
+	}
+
+	mpz_export(temp_buf, &count, 1, 1, 0, 0, z);
+
+	// Ensure leading zeros if necessary
+	if (count < size)
+	{
+		memcpy(buf + (size - count), temp_buf, count);
+	}
+	else
+	{
+		memcpy(buf, temp_buf + (count - size), size);
+	}
+
+	free(temp_buf);
+}
+
 // Protocol functions
 void serverSetup()
 { // This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
