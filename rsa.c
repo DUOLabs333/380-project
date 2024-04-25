@@ -100,5 +100,74 @@ int rsa_keyGen(RSA_KEY* K)
 	return 0;
 }
 
+int rsa_encrypt(RSA_KEY *key, const unsigned char *plaintext_buf, int plaintext_len,
+                unsigned char *encrypted_buf, int *encrypted_len) {
+    if (!key || !plaintext_buf || !encrypted_buf || !encrypted_len) {
+        fprintf(stderr, "Invalid parameters for RSA encryption.\n");
+        return 0;
+    }
 
+    // convert the GMP mpz_t to BIGNUM *
+    BIGNUM *n_bn = BN_new();
+    BIGNUM *e_bn = BN_new();
+    BN_gmp_export(n_bn, 0, key->n);
+    BN_gmp_export(e_bn, 0, key->e);
 
+    // Create RSA structure and set its n and e
+    RSA *rsa = RSA_new();
+    RSA_set0_key(rsa, n_bn, e_bn, NULL);
+
+    // encryption
+    int result = RSA_public_encrypt(plaintext_len, plaintext_buf, encrypted_buf, rsa, RSA_PKCS1_OAEP_PADDING);
+    if (result == -1) {
+        char *err_msg = malloc(130);
+        if (err_msg != NULL) {
+            ERR_load_crypto_strings();
+            ERR_error_string(ERR_get_error(), err_msg);
+            fprintf(stderr, "RSA encryption failed: %s\n", err_msg);
+            free(err_msg);
+        }
+        RSA_free(rsa);
+        return 0;
+    }
+
+    *encrypted_len = result;
+    RSA_free(rsa);
+    return 1;
+}
+
+int rsa_decrypt(RSA_KEY *key, const unsigned char *encrypted_buf, int encrypted_len,
+                unsigned char *plaintext_buf, int *plaintext_len) {
+    if (!key || !encrypted_buf || !plaintext_buf || !plaintext_len) {
+        fprintf(stderr, "Invalid parameters for RSA decryption.\n");
+        return 0;
+    }
+
+    // convert the GMP mpz_t to BIGNUM *
+    BIGNUM *n_bn = BN_new();
+    BIGNUM *d_bn = BN_new();
+    BN_gmp_export(n_bn, 0, key->n);
+    BN_gmp_export(d_bn, 0, key->d);
+
+    // Create RSA structure and set its n and d
+    RSA *rsa = RSA_new();
+    RSA_set0_key(rsa, n_bn, NULL, d_bn);
+
+    // decryption
+    int result = RSA_private_decrypt(encrypted_len, encrypted_buf, plaintext_buf, rsa, RSA_PKCS1_OAEP_PADDING);
+    if (result == -1) {
+        char *err_msg = malloc(130);
+        if (err_msg != NULL) {
+            ERR_load_crypto_strings();
+            ERR_error_string(ERR_get_error(), err_msg);
+            fprintf(stderr, "RSA decryption failed: %s\n", err_msg);
+            free(err_msg);
+        }
+        RSA_free(rsa);
+        return 0;
+    }
+
+    *plaintext_len = result;
+    RSA_free(rsa);
+    return 1;
+}
