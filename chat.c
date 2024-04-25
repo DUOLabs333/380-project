@@ -22,28 +22,29 @@ static GtkTextBuffer *mbuf; /* message buffer */
 static GtkTextView *tview;	/* view for transcript */
 static GtkTextMark *mark;	/* used for scrolling to end of transcript, etc */
 
-static pthread_t network_thread; /* wait for incoming messagess and post to queue */
-NetworkStruct args = {.port = 1337};
-
-void *recvMsg(void *); /* for trecv */
+static pthread_t network_thread;     /* wait for incoming messagess and post to queue */
+NetworkStruct args={.port=1337};
 
 #define max(a, b) \
 	({ typeof(a) _a = a;    \
 	 typeof(b) _b = b;    \
 	 _a > _b ? _a : _b; })
 
-/* network stuff... */
-
-static int listensock, sockfd;
-int isclient = 1;
-int is static void error(const char *msg)
+static void error(const char *msg)
 {
 	perror(msg);
 	exit(EXIT_FAILURE);
 }
 
-int keylen = Z2SIZE(dh_params.p) - 1;
-int keybuf = malloc(keylen);
+
+/* network stuff... */
+
+static int listensock, sockfd;
+int isclient = 1;
+int issetup=0;
+
+int keylen=Z2SIZE(dh_get_params().p)-1;
+int keybuf=malloc(keylen);
 
 #define _CONCAT(a, b) a##b
 #define CONCAT(a, b) _CONCAT(a, b)
@@ -58,8 +59,139 @@ int keybuf = malloc(keylen);
 	memset(CONCAT(name, _buf), 0, CONCAT(name, _buf_len)); \
 	pthread_cleanup_push(free, CONCAT(name, _buf));
 
-void serverSetup()
-{ // This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
+#define HASHLEN 32
+#define NUMLEN 8 //All integer values send/recived are this long
+#define MESSAGELEN 4096 
+
+int PACKETLEN=NUMLEN+MESSAGELEN+HASHLEN+NUMLEN;
+
+INITBUF(packet, PACKETLEN);
+
+INITBUF(send, packet_buf_len);
+
+INITBUF(recv, send_buf_len);
+	
+INITBUF(dec, recv_buf_len);
+	
+INITBUF(hash, HASHLEN);
+
+
+// Start of network-related functions
+//You can check whether the connection has been terminated for any reason using this: https://stackoverflow.com/a/1795562)
+
+int recvMsg(char* buf, int len, int error){
+
+	if (recv(sockfd, buf, len, MSG_WAITALL) < len){
+		if (!error){ //Don't return an error code
+			pthread_exit();
+		}
+		return -1;
+
+	}else{
+		return 0;
+	}
+}
+
+void recvMsg(char* buf, int len){
+	recvMsg(buf, len, 0);
+}
+
+pthread_t protocol_thread;
+int initServerNet(void*)
+{
+	int reuse = 1;
+	struct sockaddr_in serv_addr;
+	listensock = socket(AF_INET, SOCK_STREAM, 0);
+	setsockopt(listensock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+	/* NOTE: might not need the above if you make sure the client closes first */
+	if (listensock < 0)
+		error("ERROR opening socket");
+	bzero((char *) &serv_addr, sizeof(serv_addr));
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = inet_addr(args.hostname);
+	serv_addr.sin_port = htons(args.port);
+	if (bind(listensock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
+		error("ERROR on binding");
+
+	char status_string[80]; //Should be long enough --- TCP ports only go up to 65535, and IP addresses have <=15 characters.
+	sprintf(status_string, "Listening on %s:%i...", args.hostname, args.port);
+	send_message(STATUS,status_string);
+
+	listen(listensock,1);
+	socklen_t clilen;
+	struct sockaddr_in  cli_addr;
+
+	while(1){
+		sockfd = accept(listensock, (struct sockaddr *) &cli_addr, &clilen);
+		if (sockfd < 0){
+			sprintf(status_string, "Failed to accept connection: %s", strerror(errno)); //While this should work for the English locale, it could possibly not work for international locales (which uses more bytes per character)
+			send_message(STATUS, status_string);
+			continue;
+		}
+		send_message(STATUS, "Connection made, starting session...");
+
+
+		pthread_create(&protcol_thread, 0, protocolMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
+		pthread_join(protocol_thread, NULL);
+
+		send_message(STATUS, "Client has disconnected, waiting for another connection...");
+	}
+	return 0;
+}
+
+static int initClientNet(void*)
+{
+	struct sockaddr_in serv_addr;
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	struct hostent *server;
+	if (sockfd < 0)
+		error("ERROR opening socket");
+	server = gethostbyname(hostname);
+	if (server == NULL) {
+		error("ERROR, no such host");
+	}
+	bzero((char *) &serv_addr, sizeof(serv_addr));
+	serv_addr.sin_family = AF_INET;
+	memcpy(&serv_addr.sin_addr.s_addr,server->h_addr,server->h_length);
+	serv_addr.sin_port = htons(port);
+	
+	char status_string[80];
+	sprintf(status_string, "Connecting to %s:%i...", args.hostname, args.port);
+	send_message(STATUS,status_string);
+
+	while (1){
+		if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0){
+			sprintf(status_string, "Failed to connect: %s", strerror(errno));
+			send_message(STATUS, status_string);
+			continue;
+		}
+		
+		pthread_create(&protocol_thread, 0, protocolMain,0);
+		pthread_join(protocol_thread, NULL);
+
+		send_message(STATUS, "Server has disconnected, trying to connect again...");
+	}
+	
+	/* at this point, should be able to send/recv on sockfd */
+	return 0;
+}
+
+static int shutdownNetwork()
+{
+	shutdown(sockfd,2);
+	unsigned char dummy[64];
+	ssize_t r;
+	do {
+		r = recv(sockfd,dummy,64,0);
+	} while (r != 0 && r != -1);
+	close(sockfd);
+	return 0;
+}
+
+//End of network functions 
+
+//Protocol functions
+void serverSetup(){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
 	NEWBUF(hello, 4);
 
 	send_message(STATUS, "Waiting for initial HELLO");
@@ -177,26 +309,6 @@ void clientSetup()
 	dhFinal(b, g_b, g_a, keybuf, keylen);
 }
 
-void reset_setup(void *)
-{
-	issetup = 0;
-}
-
-#define HASHLEN 32
-#define NUMLEN 8 // All integer values send/recived are this long
-#define MESSAGELEN 4096
-
-int PACKETLEN = NUMLEN + MESSAGELEN + HASHLEN + NUMLEN;
-
-INITBUF(packet, PACKETLEN);
-
-INITBUF(send, packet_buf_len);
-
-INITBUF(recv, send_buf_len);
-
-INITBUF(dec, recv_buf_len);
-
-INITBUF(hash, HASHLEN);
 
 void recieveMessages()
 {
@@ -224,9 +336,12 @@ void recieveMessages()
 	}
 }
 
-void networkMain()
-{
-	pthread_cleanup_push(reset_setup, NULL); // When the connection is broken, the connection can no longer be considered "set up", can it?
+void reset_setup(void*){
+	issetup=0;
+}
+
+void protocolMain(void *){
+	pthread_cleanup_push(reset_setup,NULL); //When the connection is broken, the connection can no longer be considered "set up", can it?
 
 	if (isclient)
 	{
@@ -241,119 +356,19 @@ void networkMain()
 	recieveMessages();
 }
 
-// Start of network-related functions
-// Don't just accept first one --- once the connection ends (you can check using this: https://stackoverflow.com/a/1795562), accept the next one, and start protocol over
+//End of protocol functions
 
-pthread_t main_network_thread;
-int initServerNet(void *)
-{
-	int reuse = 1;
-	struct sockaddr_in serv_addr;
-	listensock = socket(AF_INET, SOCK_STREAM, 0);
-	setsockopt(listensock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-	/* NOTE: might not need the above if you make sure the client closes first */
-	if (listensock < 0)
-		error("ERROR opening socket");
-	bzero((char *)&serv_addr, sizeof(serv_addr));
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = inet_addr(args.hostname);
-	serv_addr.sin_port = htons(args.port);
-	if (bind(listensock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
-		error("ERROR on binding");
-
-	char status_string[80]; // Should be long enough --- TCP ports only go up to 65535, and IP addresses have <=15 characters.
-	sprintf(status_string, "Listening on %s:%i...", args.hostname, args.port);
-	send_message(STATUS, status_string);
-
-	listen(listensock, 1);
-	socklen_t clilen;
-	struct sockaddr_in cli_addr;
-
-	while (1)
-	{
-		sockfd = accept(listensock, (struct sockaddr *)&cli_addr, &clilen);
-		if (sockfd < 0)
-		{
-			sprintf(status_string, "Failed to accept connection: %s", strerror(errno)); // While this should work for the English locale, it could possibly not work for international locales (which uses more bytes per character)
-			send_message(STATUS, status_string);
-			continue;
-		}
-		send_message(STATUS, "Connection made, starting session...");
-
-		pthread_create(&main_network_thread, 0, networkMain, 0); // This is to allow us to use pthread_exit in another function while running serverMain
-		pthread_join(main_network_thread, NULL);
-
-		send_message(STATUS, "Client has disconnected, waiting for another connection...");
-	}
-	return 0;
-}
-
-static int initClientNet(void *)
-{
-	struct sockaddr_in serv_addr;
-	sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	struct hostent *server;
-	if (sockfd < 0)
-		error("ERROR opening socket");
-	server = gethostbyname(hostname);
-	if (server == NULL)
-	{
-		error("ERROR, no such host");
-	}
-	bzero((char *)&serv_addr, sizeof(serv_addr));
-	serv_addr.sin_family = AF_INET;
-	memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
-	serv_addr.sin_port = htons(port);
-
-	char status_string[80];
-	sprintf(status_string, "Connecting to %s:%i...", args.hostname, args.port);
-	send_message(STATUS, status_string);
-
-	while (1)
-	{
-		if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
-		{
-			sprintf(status_string, "Failed to connect: %s", strerror(errno));
-			send_message(STATUS, status_string);
-			continue;
-		}
-
-		pthread_create(&main_network_thread, 0, networkMain, 0); // This is to allow us to use pthread_exit in another function while running serverMain
-		pthread_join(main_network_thread, NULL);
-
-		send_message(STATUS, "Server has disconnected, trying to connect again...");
-	}
-
-	/* at this point, should be able to send/recv on sockfd */
-	return 0;
-}
-
-static int shutdownNetwork()
-{
-	shutdown(sockfd, 2);
-	unsigned char dummy[64];
-	ssize_t r;
-	do
-	{
-		r = recv(sockfd, dummy, 64, 0);
-	} while (r != 0 && r != -1);
-	close(sockfd);
-	return 0;
-}
-
-/* end of network stuff. */
-
-static const char *usage =
-	"Usage: %s [OPTIONS]...\n"
-	"Secure chat (CCNY computer security project).\n\n"
-	"   -c, --client  Start as a client.\n"
-	"   -s, --server        Start as a server.\n"
-	"   -h, --hostname HOSTNAME Hostname to listen/connect on (defaults to 127.0.0.1/localhost).\n"
-	"   -p, --port    PORT  Listen or connect on PORT (defaults to 1337).\n"
-	"   -m, --mine-key    PATH Path of YOUR private key.\n"
-	"   -y, --yours-key PATH Path of OTHER PERSON'S public.\n"
-	"   -g, --generate PATH Generate keys at PATH{,.pub}, then exit.\n"
-	"   -h, --help          show this message and exit.\n";
+static const char* usage =
+"Usage: %s [OPTIONS]...\n"
+"Secure chat (CCNY computer security project).\n\n"
+"   -c, --client  Start as a client.\n"
+"   -s, --server        Start as a server.\n"
+"   -h, --hostname HOSTNAME Hostname to listen/connect on (defaults to 127.0.0.1/localhost).\n"
+"   -p, --port    PORT  Listen or connect on PORT (defaults to 1337).\n"
+"   -m, --mine-key    PATH Path of YOUR private key.\n"
+"   -y, --yours-key PATH Path of OTHER PERSON'S public.\n"
+"   -g, --generate PATH Generate keys at PATH{,.pub}, then exit.\n"
+"   -h, --help          show this message and exit.\n";
 
 /* Append message to transcript with optional styling.  NOTE: tagnames, if not
  * NULL, must have it's last pointer be NULL to denote its end.  We also require
@@ -395,10 +410,9 @@ int mutex_dummy = pthread_mutex_init(&send_message_mutex, NULL); // So I can ini
 static void sendMessage(GtkWidget *w /* <-- msg entry widget */, gpointer /* data */)
 {
 
-	pthread_mutex_lock(&send_message_mutex);
+	pthread_mutex_lock(&send_message_mutex); //I'm not sure GTK signals are in a queue, or threads, so we lock just in case
 
-	if (!issetup)
-	{ // Is not setup so we can't do anything
+	if(!issetup){ //Protocol is not setup so we can't do anything
 		send_message(STATUS, "Protocol is not set up yet...");
 	}
 	else
@@ -424,9 +438,8 @@ static void sendMessage(GtkWidget *w /* <-- msg entry widget */, gpointer /* dat
 
 		int ret = sendMsg(send_buf, send_buf_len, 1); // Send message. The 1 at the end tells it to return a -1 upon error, instead of a pthread_exit
 
-		if (ret == -1)
-		{
-			pthread_cancel(main_network_thread); // Cancel the main network thread.
+		if (ret==-1){
+			pthread_cancel(protocol_thread); //Cancel the protocol thread.
 			send_message(STATUS, "Message failed to send");
 		}
 		else
@@ -439,8 +452,6 @@ static void sendMessage(GtkWidget *w /* <-- msg entry widget */, gpointer /* dat
 
 			send_message(STATUS, "Message sent successfully!");
 		}
-
-		return;
 
 		/* XXX we should probably do the actual network stuff in a different
 		 * thread and have it call this once the message is actually sent. */
