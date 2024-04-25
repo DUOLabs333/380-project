@@ -13,6 +13,7 @@
 #include <getopt.h>
 #include "dh.h"
 #include "keys.h"
+#include "rsa.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 1024
@@ -227,15 +228,22 @@ static int shutdownNetwork()
 
 void sha256_hash(const unsigned char *input, size_t input_len, unsigned char *output)
 {
-	// Initialize context
-	SHA256_CTX sha256_ctx;
-	SHA256_Init(&sha256_ctx);
+	EVP_MD_CTX *mdctx;
 
-	// Update context with the input data
-	SHA256_Update(&sha256_ctx, input, input_len);
+	if ((mdctx = EVP_MD_CTX_new()) == NULL)
+		perror("Failed to create EVP_MD_CTX");
 
-	// Finalize hash computation
-	SHA256_Final(output, &sha256_ctx);
+	if (1 != EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL))
+		perror("Failed to init digest");
+
+	if (1 != EVP_DigestUpdate(mdctx, input, input_len))
+		perror("Failed to update digest");
+
+	unsigned int output_len;
+	if (1 != EVP_DigestFinal_ex(mdctx, output, &output_len))
+		perror("Failed to finalize digest");
+
+	EVP_MD_CTX_free(mdctx);
 }
 
 void BYTES2Z(const unsigned char *bytes, size_t len, mpz_t z)
@@ -252,16 +260,9 @@ size_t Z2BYTES(const mpz_t z, unsigned char *bytes, size_t max_len)
 
 void Z2NEWBYTES(const mpz_t z, size_t size, unsigned char *buf)
 {
-	if (buf == NULL)
-	{
-		fprintf(stderr, "Buffer not allocated in Z2NEWBYTES\n");
-		return;
-	}
-
 	memset(buf, 0, size);
 	size_t count = 0;
 	unsigned char *temp_buf = (unsigned char *)malloc(size);
-
 	if (temp_buf == NULL)
 	{
 		fprintf(stderr, "Memory allocation failed in Z2NEWBYTES\n");
@@ -269,8 +270,6 @@ void Z2NEWBYTES(const mpz_t z, size_t size, unsigned char *buf)
 	}
 
 	mpz_export(temp_buf, &count, 1, 1, 0, 0, z);
-
-	// Ensure leading zeros if necessary
 	if (count < size)
 	{
 		memcpy(buf + (size - count), temp_buf, count);
