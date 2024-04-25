@@ -54,48 +54,73 @@ static void error(const char *msg)
 }
 
 
-/* network stuff... */
+//GTK Text Functions  
+/* Append message to transcript with optional styling.  NOTE: tagnames, if not
+ * NULL, must have it's last pointer be NULL to denote its end.  We also require
+ * that messsage is a NULL terminated string.  If ensurenewline is non-zero, then
+ * a newline may be added at the end of the string (possibly overwriting the \0
+ * char!) and the view will be scrolled to ensure the added line is visible.  */
+static void tsappend(char* message, char** tagnames, int ensurenewline)
+{
+	GtkTextIter t0;
+	gtk_text_buffer_get_end_iter(tbuf,&t0);
+	size_t len = g_utf8_strlen(message,-1);
+	if (ensurenewline && message[len-1] != '\n')
+		message[len++] = '\n';
+	gtk_text_buffer_insert(tbuf,&t0,message,len);
+	GtkTextIter t1;
+	gtk_text_buffer_get_end_iter(tbuf,&t1);
+	/* Insertion of text may have invalidated t0, so recompute: */
+	t0 = t1;
+	gtk_text_iter_backward_chars(&t0,len);
+	if (tagnames) {
+		char** tag = tagnames;
+		while (*tag) {
+			gtk_text_buffer_apply_tag_by_name(tbuf,*tag,&t0,&t1);
+			tag++;
+		}
+	}
+	if (!ensurenewline) return;
+	gtk_text_buffer_add_mark(tbuf,mark,&t1);
+	gtk_text_view_scroll_to_mark(tview,mark,0.0,0,0.0,0.0);
+	gtk_text_buffer_delete_mark(tbuf,mark);
+}
 
-static int listensock, sockfd;
-int isclient = 1;
-int issetup=0;
+void send_status_message(char* msg){
+	while(!g_main_context_acquire(NULL)){
+		continue;
+	}
 
-int keylen=Z2SIZE(dh_get_params().p)-1;
-int keybuf=malloc(keylen);
+	char* tags[2]={"status", NULL};
+	tsappend(msg, tags, 1);
 
-#define _CONCAT(a,b) a##b
-#define CONCAT(a,b) _CONCAT(a,b)
+	//g_main_context_release(NULL);
 
-#define _INITBUF(name, len) \
-	int CONCAT(name,_buf_len)=len;\
-	char* CONCAT(name,_buf)=malloc(CONCAT(name,_buf_len));
+void show_new_message(char* msg, int length)
+{
+	while(!g_main_context_acquire(NULL)){
+		continue;
+	}
+	char* tags[2] = {"friend",NULL};
+	char* friendname = "mr. friend: ";
+	tsappend(friendname,tags,0);
 
-#define INITBUF(name,len) _INITBUF(name, len)
-#define NEWBUF(name, len) \
-	INITBUF(name, len)\
-	memset(CONCAT(name,_buf),0,CONCAT(name,_buf_len));\
-	pthread_cleanup_push(free, CONCAT(name,_buf));
+	char* message=malloc(length+1);
+	memcpy(message, msg, length);
+	message[length]='\0';
 
+	tsappend(message,NULL,1);
+	free(message);
 
-#define HASHLEN 32
-#define NUMLEN 8 //All integer values send/recived are this long
-#define MESSAGELEN 4096 
-
-int PACKETLEN=NUMLEN+MESSAGELEN+HASHLEN+NUMLEN;
-
-INITBUF(packet, PACKETLEN);
-
-INITBUF(send, packet_buf_len);
-
-INITBUF(recv, send_buf_len);
-	
-INITBUF(dec, recv_buf_len);
-	
-INITBUF(hash, HASHLEN);
-
+	g_main_context_release(NULL);
+}
+//End of GTK Text functions 
 
 // Start of network-related functions
 //You can check whether the connection has been terminated for any reason using this: https://stackoverflow.com/a/1795562)
+
+static int listensock, sockfd;
+void* protocolMain(void *);
 
 void recvMsg(char* buf, int len){
 
@@ -115,12 +140,8 @@ int sendMsg(char* buf, int len, int error){
 	}
 }
 
-void sendMsg(char* buf, int len){
-	sendMsg(buf, len, 0);
-}
-
 pthread_t protocol_thread;
-int initServerNet(void*)
+void* initServerNet(void*)
 {
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
@@ -154,7 +175,7 @@ int initServerNet(void*)
 		send_status_message("Connection made, starting session...");
 
 
-		pthread_create(&protcol_thread, 0, protocolMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
+		pthread_create(&protocol_thread, 0, protocolMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
 		pthread_join(protocol_thread, NULL);
 
 		send_status_message("Client has disconnected, waiting for another connection...");
@@ -162,7 +183,7 @@ int initServerNet(void*)
 	return 0;
 }
 
-static int initClientNet(void*)
+void* initClientNet(void*)
 {
 	struct sockaddr_in serv_addr;
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -199,7 +220,7 @@ static int initClientNet(void*)
 	return 0;
 }
 
-static int shutdownNetwork()
+int shutdownNetwork()
 {
 	shutdown(sockfd,2);
 	unsigned char dummy[64];
@@ -212,6 +233,43 @@ static int shutdownNetwork()
 }
 
 //End of network functions 
+int isclient = 1;
+int issetup=0;
+
+int keylen;
+unsigned char* keybuf;
+
+
+#define _CONCAT(a,b) a##b
+#define CONCAT(a,b) _CONCAT(a,b)
+
+#define NEWBUF(name, len) \
+	int CONCAT(name,_buf_len)=len;\
+	char* CONCAT(name,_buf)=malloc(CONCAT(name,_buf_len));\
+	memset(CONCAT(name,_buf),0,CONCAT(name,_buf_len));\
+	pthread_cleanup_push(free, CONCAT(name,_buf));
+
+
+#define HASHLEN 32
+#define NUMLEN 8 //All integer values send/recived are this long
+#define MESSAGELEN 4096 
+
+const int PACKETLEN=NUMLEN+MESSAGELEN+HASHLEN+NUMLEN;
+
+const int packet_buf_len=PACKETLEN; 
+char* packet_buf; //The unencrypted bytes that will be sent
+
+const int send_buf_len=packet_buf_len;
+char* send_buf; //The encrypted bytes that will be sent
+
+const int recv_buf_len=send_buf_len;
+char* recv_buf; //The encrypted bytes recieved
+
+const int dec_buf_len=recv_buf_len;
+char* dec_buf; //The decrypted bytes recieved
+
+const int hash_buf_len=HASHLEN;
+char* hash_buf;
 
 //Protocol functions
 void serverSetup(){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
@@ -240,14 +298,14 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	RSA_KEY* yoursRSA=structs[YOURS].key;
 	
 
-	Z2NEWBYTES(g_a, Z2SIZE(dh_params.p)); //Creates new buffer *_buf, along with *_buf_len with size equal to provided size (use NEWBUF).
+	Z2NEWBYTES(g_a, Z2SIZE(dh_get_params('p'))); //Creates new buffer *_buf, along with *_buf_len with size equal to provided size (use NEWBUF).
 
 
 	NEWBUF(enc_b, Z2SIZE(yoursRSA->n)); //Every RSA encrypted message is as big as K->n
 
 	rsa_encrypt(structs[YOURS].key, g_a_buf, g_a_buf_len, enc_b_buf, enc_b_buf_len); //Enc_{PkB}(g^a mod p)
 
-	sendMsg(enc_b_buf, enc_b_buf_len);
+	sendMsg(enc_b_buf, enc_b_buf_len, 0);
 
 	NEWBUF(enc_a, Z2SIZE(mineRSA->n));
 
@@ -272,20 +330,24 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	
 	rsa_encrypt(structs[YOURS].key, g_b_buf, g_b_buf_len, enc_b_buf, enc_b_buf_len); //Enc_{PkB}(g^b mod p)
 
-	sendMsg(enc_b_buf, enc_b_buf_len);
+	sendMsg(enc_b_buf, enc_b_buf_len,0 );
 
 	dhFinal(a, g_a, g_b, keybuf, keylen);
+	
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 
 }
 
 void clientSetup(){
-
 	NEWBUF(hello, 4);
 	memcpy(hello_buf, "HELLO", 4);
 
 	send_status_message("Sending initial HELLO");
 
-	sendMsg(hello_buf, hello_buf_len);
+	sendMsg(hello_buf, hello_buf_len,0 );
 
 	send_status_message("Recieved a HELLO");
 	
@@ -296,7 +358,7 @@ void clientSetup(){
 
 	recvMsg(enc_b_buf,enc_b_buf_len);
 
-	NEWBUF(g_a, Z2SIZE(dh_params.p));
+	NEWBUF(g_a, Z2SIZE(dh_get_params('p')));
 
 	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_a_buf,g_a_buf_len);
 
@@ -316,7 +378,7 @@ void clientSetup(){
 	NEWBUF(enc_a, Z2SIZE(yoursRSA->n));
 
 	rsa_encrypt(structs[YOURS].key, g_a_g_b_buf, g_a_g_b_buf_len, enc_a_buf, enc_a_buf_len);
-	sendMsg(enc_a_buf,enc_a_buf_len);
+	sendMsg(enc_a_buf,enc_a_buf_len, 0);
 
 	recvMsg(enc_b_buf, enc_b_buf_len);
 	
@@ -332,6 +394,13 @@ void clientSetup(){
 	NEWZ(g_a);
 	BYTES2Z(g_a_buf, g_a_buf_len, g_a);
 	dhFinal(b, g_b, g_a, keybuf, keylen);
+
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 }
 
 
@@ -363,7 +432,7 @@ void reset_setup(void*){
 	issetup=0;
 }
 
-void protocolMain(void *){
+void* protocolMain(void *){
 	pthread_cleanup_push(reset_setup,NULL); //When the connection is broken, the connection can no longer be considered "set up", can it?
 
 	if (isclient){
@@ -374,11 +443,13 @@ void protocolMain(void *){
 	send_status_message("Setup successful. Moving to main messaging protocol..."); 
 	issetup=1;
 	recieveMessages();
+
+	pthread_cleanup_pop(1);
 }
 
 
 pthread_mutex_t send_message_mutex;
-int mutex_dummy=pthread_mutex_init(&send_message_mutex, NULL); //So I can initialize the mutex before main()
+
 static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* data */)
 {
 
@@ -445,69 +516,6 @@ static const char* usage =
 "   -g, --generate PATH Generate keys at PATH{,.pub}, then exit.\n"
 "   -h, --help          show this message and exit.\n";
 
-/* Append message to transcript with optional styling.  NOTE: tagnames, if not
- * NULL, must have it's last pointer be NULL to denote its end.  We also require
- * that messsage is a NULL terminated string.  If ensurenewline is non-zero, then
- * a newline may be added at the end of the string (possibly overwriting the \0
- * char!) and the view will be scrolled to ensure the added line is visible.  */
-static void tsappend(char* message, char** tagnames, int ensurenewline)
-{
-	GtkTextIter t0;
-	gtk_text_buffer_get_end_iter(tbuf,&t0);
-	size_t len = g_utf8_strlen(message,-1);
-	if (ensurenewline && message[len-1] != '\n')
-		message[len++] = '\n';
-	gtk_text_buffer_insert(tbuf,&t0,message,len);
-	GtkTextIter t1;
-	gtk_text_buffer_get_end_iter(tbuf,&t1);
-	/* Insertion of text may have invalidated t0, so recompute: */
-	t0 = t1;
-	gtk_text_iter_backward_chars(&t0,len);
-	if (tagnames) {
-		char** tag = tagnames;
-		while (*tag) {
-			gtk_text_buffer_apply_tag_by_name(tbuf,*tag,&t0,&t1);
-			tag++;
-		}
-	}
-	if (!ensurenewline) return;
-	gtk_text_buffer_add_mark(tbuf,mark,&t1);
-	gtk_text_view_scroll_to_mark(tview,mark,0.0,0,0.0,0.0);
-	gtk_text_buffer_delete_mark(tbuf,mark);
-}
-
-
-int MINE=0;
-int YOURS=1;
-
-void send_status_message(char* msg){
-	while(!g_main_context_acquire(NULL)){
-		continue;
-	}
-
-	char* tags[2]={"status", NULL};
-	tsappend(msg tags, 1);
-
-	g_main_context_release(NULL);
-
-void show_new_message(char* msg, int length)
-{
-	while(!g_main_context_acquire(NULL)){
-		continue;
-	}
-	char* tags[2] = {"friend",NULL};
-	char* friendname = "mr. friend: ";
-	tsappend(friendname,tags,0);
-
-	char* message=malloc(length+1);
-	memcpy(message, msg, length);
-	message[length]='\0';
-
-	tsappend(message,NULL,1);
-	free(message);
-
-	g_main_context_release(NULL);
-}
 
 void _strcpy(char** dst, char* src){
 	int len=strlen(src)+1;
@@ -542,6 +550,20 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "could not read DH params from file 'params'\n");
 		return 1;
 	}
+	
+	//Initialization of global objects
+	keylen=Z2SIZE(dh_get_params('p'))-1;
+	keybuf=malloc(keylen);
+	
+	pthread_mutex_init(&send_message_mutex, NULL);
+
+	packet_buf=malloc(packet_buf_len);
+	send_buf=malloc(send_buf_len);
+	recv_buf=malloc(recv_buf_len);
+	dec_buf=malloc(dec_buf_len);
+	hash_buf=malloc(hash_buf_len);
+
+	//End of initialization
 
 	// define long options
 	static struct option long_opts[] = {
@@ -603,7 +625,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (generate!=NULL){
-		rsa_generate_keys(generate,dh_get_params().p); //Generates, then saves to keyPath. Makes sure that len(n)>2*len(dh_p)
+		rsa_generate_keys(generate,dh_get_params('p')); //Generates, then saves to keyPath. Makes sure that len(n)>2*len(dh_p)
 		exit(0);
 	}else{
 		rsa_load_keys(structs[MINE],1); //1 indicates load both private (0 means public). Should error at any error.
@@ -617,12 +639,12 @@ int main(int argc, char *argv[])
 	GObject* button;
 	GObject* transcript;
 	GObject* message;
-	GError* error = NULL;
+	GError* gerror = NULL;
 	gtk_init(&argc, &argv);
 	builder = gtk_builder_new();
-	if (gtk_builder_add_from_file(builder,"layout.ui",&error) == 0) {
-		g_printerr("Error reading %s\n", error->message);
-		g_clear_error(&error);
+	if (gtk_builder_add_from_file(builder,"layout.ui",&gerror) == 0) {
+		g_printerr("Error reading %s\n", gerror->message);
+		g_clear_error(&gerror);
 		return 1;
 	}
 	mark  = gtk_text_mark_new(NULL,TRUE);
@@ -660,7 +682,7 @@ int main(int argc, char *argv[])
 		}
 		ret=pthread_create(&network_thread,0,initClientNet, 0);
 	} else {
-		if (!strcmp(hostname, "")){
+		if (!strcmp(network_params.hostname, "")){
 			sprintf(network_params.hostname, "127.0.0.1");
 		}
 		ret=pthread_create(&network_thread,0,initServerNet, 0);
