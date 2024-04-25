@@ -219,6 +219,7 @@ void recieveMessages(){
 
 		send_message(YOURS, dec_buf+NUMLEN, min(decodeInt(dec_buf), MESSAGELEN));
 		structs[YOURS].counter++;
+		send_message(STATUS, "Message successfully recieved!");
 
 	}
 
@@ -412,12 +413,15 @@ static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* dat
 
 		if (ret==-1){
 			pthread_cancel(main_network_thread); //Cancel the main network thread.
+			send_message(STATUS, "Message failed to send");
 		}else{
 			tsappend(message,NULL,1);
 			free(message);
 			/* clear message text and reset focus */
 			gtk_text_buffer_delete(mbuf,&mstart,&mend);
 			gtk_widget_grab_focus(w);
+
+			send_message(STATUS, "Message sent successfully!");
 		}
 
 		return;
