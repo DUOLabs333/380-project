@@ -37,14 +37,14 @@ Now, let's discuss the assumptions the security of `chat` is provided upon:
 With all of that out of the way, let's finally move on to describe the actual protocol used in `chat`:
 	First, the correspondents need to set up and agree on a shared secret key to be used for subsequent messages. This is done using a modified version of the Diffie-Hellman (DH) key exchange protocol:
 	1. Bob sends Alice a plaintext "Hello" message.
-		This tells Alice to disregard anything she was doing at the moment and switch to "setup" mode, as a new conversation is about to take place.
+		This tells Alice to start "setup" mode, as a new conversation is about to take place.
+			This is useful when dealing with disconnects.
 
-		This is useful when dealing with disconnects (though `chat` does not implement the necessary retrying logic)
 
 	2. Alice generates a random integer `a` and sends to Bob Enc_{PkB}(g^a mod p)
 		Since Alice and Bob are not generating new DH parameters every conversation, but instead will always use the parameters given in the `params` file, we are also implicitly assuming that there there is no backdoor in the parameters provided that would make it easier for Mal to figure out the secret key that will eventually be used.
 
-		Since we are encrypting a value that is of most p, the n used in both Alice's and Bob's private key must be >= p. The other benefit of using RSA encryption is that the encryption length is fixed, which minimized buffer overflows/underflows.
+		Since we are encrypting a value that is of most p, the length of n used in both Alice's and Bob's private key must be >= 2*len(p). The other benefit of using RSA encryption is that the encryption length is fixed, which minimizes buffer overflows/underflows.
 
 		Similarly, g^x mod p also has a fixed length.
 	
@@ -60,13 +60,14 @@ With all of that out of the way, let's finally move on to describe the actual pr
 	*NOTE*: Almost all of this setup can be done by the functions provided in dh.h
 
 	At this point, Alice and Bob are in "message mode", as they will now use the generated secret key to encrypt messages using the AES symmetric scheme.
+		AES is used as it has a mode that preserves byte-level message length.
 
 	Alice and Bob keeps two counters, mine and yours. Both are 64 bits long, and both start at 0.
-		They are used to keep track of how many messages have been sent and recieved. It also acts as a way to prevent replay attacks --- Mal can't send the same message twice as the counter values will no longer match with what the correspondents have.
+		They are used to keep track of how many messages have been sent and received. It also acts as a way to prevent replay attacks --- Mal can't send the same message twice as the counter values will no longer match with what the correspondents have.
 
 		This can be implemented using the unsigned long long data type.
 
-		You must be careful when dealing with machines different endians when transmitting and reading integers across a network. Additionally, you must take care to pad the integers.
+		You must be careful when dealing with the endians of different machines when transmitting and reading integers across a network. Additionally, you must take care to pad the integers.
 
 		Eventually the counters will overflow, and Mal will be able to do a replay attack. However, this is likely not to be a problem for two reasons: one, 2^64 is ~18 quintillion, which is (much) more than the number of messages that are likely to be sent in one session; and two, even if Mal can successfully execute a replay attack, the worst that will happen is that correspondent Y will see a message twice, which is a low-impact vulnerability (especially since it can only happen once every 18 quintillion messages).
 			To reduce the probability of the occurrence of this vulnerability even further, instead of a counter, a random nonce can be used, with each message telling the other correspondent what the next nonce will be (so correspondents don't need to keep track of every single nonce ever sent). To be clear, this idea has the same fundamental issue as the deterministic counter --- limited space for valid values --- however, this would be better, as the nonces would be unpredictable, so Mal would not know when she can successfully execute a replay attack. 
@@ -83,7 +84,7 @@ With all of that out of the way, let's finally move on to describe the actual pr
 
 	*NOTE*: If at any point during messaging, a check fails, the correspondent silently ignores the message --- if Mal knows that her message caused an error, it is possible that she can use it to figure out something about sk.
 
-	An eagle-eyed reader may notice we are MAC-then-encrypting, which is almost universally denounced as bad, as it opens one up to an timing-oracle attack. However, this (should) does not apply here, as nothing is sent back over the connection, regardless of the success of decrypting. Therefore, there's nothing Mal can use to conclude whether her forged message was valid or not.
+	An eagle-eyed reader may notice we are MAC-then-encrypting, which is almost universally denounced as bad security, as it opens one up to an timing-oracle attack. However, this (should) does not apply here, as nothing is sent back over the connection, regardless of the success of decrypting. Therefore, there's nothing Mal can use to conclude whether her forged message was valid or not.
 
 The length of the messages a correspondent can send is limited to avoid Mal (or a malicious correspondent) from DDosing a correspondent by sending a long enough message to cause them to run out of memory.
 	Luckily, even though the length of an individual message is limited, this can be built on top of to allow for sending messages of arbitrary length: A message is delimited when len(message) for one "packet" < 4096.
