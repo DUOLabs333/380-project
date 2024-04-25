@@ -94,7 +94,8 @@ void send_status_message(char* msg){
 	char* tags[2]={"status", NULL};
 	tsappend(msg, tags, 1);
 
-	//g_main_context_release(NULL);
+	g_main_context_release(NULL);
+}
 
 void show_new_message(char* msg, int length)
 {
@@ -277,7 +278,7 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	
 	send_status_message("Waiting for initial HELLO");
 
-	int ret;
+
 	while(1){
 		recvMsg(hello_buf, hello_buf_len);
 		if(strncmp(hello_buf,"HELLO", hello_buf_len)){ //You must get a "HELLO" to continue
@@ -445,6 +446,8 @@ void* protocolMain(void *){
 	recieveMessages();
 
 	pthread_cleanup_pop(1);
+
+	return NULL;
 }
 
 
