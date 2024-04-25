@@ -3,6 +3,7 @@
 #include <bits/getopt_ext.h>
 #include <gtk/gtk.h>
 #include <glib/gunicode.h> /* for utf8 strlen */
+#include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -23,12 +24,28 @@ static GtkTextView*  tview; /* view for transcript */
 static GtkTextMark*   mark; /* used for scrolling to end of transcript, etc */
 
 static pthread_t network_thread;     /* wait for incoming messagess and post to queue */
-NetworkStruct args={.port=1337};
 
-#define max(a, b)         \
+struct NetworkStruct{
+	char hostname[HOST_NAME_MAX+1];
+	int port;
+};
+
+struct ProtocolStruct{
+	char* keyPath;
+	RSA_KEY* key;
+	unsigned long long counter;
+};
+
+int MINE=0;
+int YOURS=1;
+
+struct ProtocolStruct structs[2]={0};
+struct NetworkStruct network_params={.port=1337};
+
+#define min(a, b)         \
 	({ typeof(a) _a = a;    \
 	 typeof(b) _b = b;    \
-	 _a > _b ? _a : _b; })
+	 _a > _b ? _b : _a; })
 
 static void error(const char *msg)
 {
@@ -80,21 +97,26 @@ INITBUF(hash, HASHLEN);
 // Start of network-related functions
 //You can check whether the connection has been terminated for any reason using this: https://stackoverflow.com/a/1795562)
 
-int recvMsg(char* buf, int len, int error){
+void recvMsg(char* buf, int len){
 
 	if (recv(sockfd, buf, len, MSG_WAITALL) < len){
-		if (!error){ //Don't return an error code
-			pthread_exit();
+		pthread_exit(NULL);
+	}
+}
+
+int sendMsg(char* buf, int len, int error){
+	if (send(sockfd, buf, len, 0) < len){
+		if (!error){ //Don't return error code
+			pthread_exit(NULL);
 		}
 		return -1;
-
 	}else{
 		return 0;
 	}
 }
 
-void recvMsg(char* buf, int len){
-	recvMsg(buf, len, 0);
+void sendMsg(char* buf, int len){
+	sendMsg(buf, len, 0);
 }
 
 pthread_t protocol_thread;
@@ -109,14 +131,14 @@ int initServerNet(void*)
 		error("ERROR opening socket");
 	bzero((char *) &serv_addr, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = inet_addr(args.hostname);
-	serv_addr.sin_port = htons(args.port);
+	serv_addr.sin_addr.s_addr = inet_addr(network_params.hostname);
+	serv_addr.sin_port = htons(network_params.port);
 	if (bind(listensock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 		error("ERROR on binding");
 
 	char status_string[80]; //Should be long enough --- TCP ports only go up to 65535, and IP addresses have <=15 characters.
-	sprintf(status_string, "Listening on %s:%i...", args.hostname, args.port);
-	send_message(STATUS,status_string);
+	sprintf(status_string, "Listening on %s:%i...", network_params.hostname, network_params.port);
+	send_status_message(status_string);
 
 	listen(listensock,1);
 	socklen_t clilen;
@@ -126,16 +148,16 @@ int initServerNet(void*)
 		sockfd = accept(listensock, (struct sockaddr *) &cli_addr, &clilen);
 		if (sockfd < 0){
 			sprintf(status_string, "Failed to accept connection: %s", strerror(errno)); //While this should work for the English locale, it could possibly not work for international locales (which uses more bytes per character)
-			send_message(STATUS, status_string);
+			send_status_message(status_string);
 			continue;
 		}
-		send_message(STATUS, "Connection made, starting session...");
+		send_status_message("Connection made, starting session...");
 
 
 		pthread_create(&protcol_thread, 0, protocolMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
 		pthread_join(protocol_thread, NULL);
 
-		send_message(STATUS, "Client has disconnected, waiting for another connection...");
+		send_status_message("Client has disconnected, waiting for another connection...");
 	}
 	return 0;
 }
@@ -147,30 +169,30 @@ static int initClientNet(void*)
 	struct hostent *server;
 	if (sockfd < 0)
 		error("ERROR opening socket");
-	server = gethostbyname(hostname);
+	server = gethostbyname(network_params.hostname);
 	if (server == NULL) {
 		error("ERROR, no such host");
 	}
 	bzero((char *) &serv_addr, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
 	memcpy(&serv_addr.sin_addr.s_addr,server->h_addr,server->h_length);
-	serv_addr.sin_port = htons(port);
+	serv_addr.sin_port = htons(network_params.port);
 	
 	char status_string[80];
-	sprintf(status_string, "Connecting to %s:%i...", args.hostname, args.port);
-	send_message(STATUS,status_string);
+	sprintf(status_string, "Connecting to %s:%i...", network_params.hostname, network_params.port);
+	send_status_message(status_string);
 
 	while (1){
 		if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0){
 			sprintf(status_string, "Failed to connect: %s", strerror(errno));
-			send_message(STATUS, status_string);
+			send_status_message(status_string);
 			continue;
 		}
 		
 		pthread_create(&protocol_thread, 0, protocolMain,0);
 		pthread_join(protocol_thread, NULL);
 
-		send_message(STATUS, "Server has disconnected, trying to connect again...");
+		send_status_message("Server has disconnected, trying to connect again...");
 	}
 	
 	/* at this point, should be able to send/recv on sockfd */
@@ -195,24 +217,24 @@ static int shutdownNetwork()
 void serverSetup(){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
 	NEWBUF(hello, 4);
 	
-	send_message(STATUS, "Waiting for initial HELLO");
+	send_status_message("Waiting for initial HELLO");
 
 	int ret;
 	while(1){
-	recvMsg(hello_buf, hello_buf_len); //If recvMsg gets a -1, call pthread_exit() in recvMsg
-	if(strncmp(hello_buf,"HELLO", hello_buf_len)){ //You must get a "HELLO" to continue
-		continue;
-	}
+		recvMsg(hello_buf, hello_buf_len);
+		if(strncmp(hello_buf,"HELLO", hello_buf_len)){ //You must get a "HELLO" to continue
+			continue;
+		}
 
 	}
 	
-	send_message(STATUS, "Recieved a HELLO");
+	send_status_message("Recieved a HELLO");
 
 	NEWZ(a); //Initialize new mpz_t
 	NEWZ(g_a);
 	dhGen(a, g_a); //Generates a and g^a mod p
 	
-	send_message(STATUS, "Created mine part for Diffie-Hellman");
+	send_status_message("Created mine part for Diffie-Hellman");
 
 	RSA_KEY* mineRSA=structs[MINE].key;
 	RSA_KEY* yoursRSA=structs[YOURS].key;
@@ -238,7 +260,7 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 
 
 	if(memcmp(dec_a_buf,g_a_buf, g_a_buf_len)){
-		send_message(STATUS, "Mine g^a and yours g^a do not match. Disconnecting...");
+		send_status_message("Mine g^a and yours g^a do not match. Disconnecting...");
 		pthread_exit(NULL);
 	}
 
@@ -261,11 +283,11 @@ void clientSetup(){
 	NEWBUF(hello, 4);
 	memcpy(hello_buf, "HELLO", 4);
 
-	send_message(STATUS, "Sending initial HELLO");
+	send_status_message("Sending initial HELLO");
 
 	sendMsg(hello_buf, hello_buf_len);
 
-	send_message(STATUS, "Recieved a HELLO");
+	send_status_message("Recieved a HELLO");
 	
 	RSA_KEY* mineRSA=structs[MINE].key;
 	RSA_KEY* yoursRSA=structs[YOURS].key;
@@ -282,7 +304,7 @@ void clientSetup(){
 	NEWZ(b);
 	NEWZ(g_b);
 	dhGen(b, g_b);
-	send_message(STATUS, "Created yours part for Diffie-Hellman");
+	send_status_message("Created yours part for Diffie-Hellman");
 
 	Z2NEWBYTES(g_b); //Creates new buffer *_buf, along with *_buf_len
 
@@ -303,7 +325,7 @@ void clientSetup(){
 	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
 
 	if(memcmp(g_b_a_buf, g_b_buf, g_b_buf_len)){
-		send_message(STATUS, "Mine g^b and yours g^b do not match. Disconnecting...");
+		send_status_message("Mine g^b and yours g^b do not match. Disconnecting...");
 		pthread_exit(NULL);
 	}
 	
@@ -316,22 +338,22 @@ void clientSetup(){
 void recieveMessages(){
 	while(1){
 		recvMsg(recv_buf, recv_buf_len);
-		send_message(STATUS, "Recieved packet...");
+		send_status_message("Recieved packet...");
 		aes_decrypt(keybuf, keylen, recv_buf, recv_buf_len, dec_buf, dec_buf_len);
 		sha256_hash(dec_buf, dec_buf_len, hash_buf);
 		if(memcmp(dec_buf+NUMLEN+MESSAGELEN, hash_buf, hash_buf_len)){
-			send_message(STATUS, "Hashes do not match...");
+			send_status_message("Hashes do not match...");
 			continue;
 		}
 //send_message has overloads, one without length, and one with. send_message copies into its own buffer
 		if(decodeInt(dec_buf+(dec_buf_len-NUMLEN))!=structs[YOURS].counter){
-			send_message(STATUS, "Counter values do not match");
+			send_status_message("Counter values do not match");
 			continue;
 		}
 
-		send_message(YOURS, dec_buf+NUMLEN, min(decodeInt(dec_buf), MESSAGELEN));
+		show_new_message(dec_buf+NUMLEN, min(decodeInt(dec_buf), MESSAGELEN));
 		structs[YOURS].counter++;
-		send_message(STATUS, "Message successfully recieved!");
+		send_status_message("Message successfully recieved!");
 
 	}
 
@@ -349,13 +371,68 @@ void protocolMain(void *){
 	}else{
 		serverSetup();
 	}
-	send_message(STATUS, "Setup successful. Moving to main messaging protocol..."); 
+	send_status_message("Setup successful. Moving to main messaging protocol..."); 
 	issetup=1;
 	recieveMessages();
 }
 
+
+pthread_mutex_t send_message_mutex;
+int mutex_dummy=pthread_mutex_init(&send_message_mutex, NULL); //So I can initialize the mutex before main()
+static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* data */)
+{
+
+	pthread_mutex_lock(&send_message_mutex); //I'm not sure GTK signals are in a queue, or threads, so we lock just in case
+
+	if(!issetup){ //Protocol is not setup so we can't do anything
+		send_status_message("Protocol is not set up yet...");
+	}else{
+
+		char* tags[2] = {"self",NULL};
+		tsappend("me: ",tags,0);
+
+		GtkTextIter mstart; /* start of message pointer */
+		GtkTextIter mend;   /* end of message pointer */
+		gtk_text_buffer_get_start_iter(mbuf,&mstart);
+		gtk_text_buffer_get_end_iter(mbuf,&mend);
+		char* message = gtk_text_buffer_get_text(mbuf,&mstart,&mend,1);
+		size_t len = g_utf8_strlen(message,-1);
+
+		encodeInt(len, packet_buf); //Encode the length of the message
+		memcpy(packet_buf+NUMLEN, message, min(len, MESSAGELEN)); //Copy the message (however, to avoid overflow, copy at most MESSAGELEN bytes. We are not copying the NUL terminator, though so the other end needs to add it back to display it)
+
+		sha256_hash(packet_buf, NUMLEN+MESSAGELEN, packet_buf+(packet_buf_len-(NUMLEN+HASHLEN))); //Hash the plaintext to ensure (plaintext) integrity
+		encodeInt(structs[MINE].counter, packet_buf+(packet_buf_len-(NUMLEN))); //Encode the message counter
+
+		aes_encrypt(packet_buf, packet_buf_len, send_buf); //Encrypt message
+
+		int ret=sendMsg(send_buf, send_buf_len,1); //Send message. The 1 at the end tells it to return a -1 upon error, instead of a pthread_exit
+
+		if (ret==-1){
+			pthread_cancel(protocol_thread); //Cancel the protocol thread.
+			send_status_message("Message failed to send");
+		}else{
+			tsappend(message,NULL,1);
+			free(message);
+			/* clear message text and reset focus */
+			gtk_text_buffer_delete(mbuf,&mstart,&mend);
+			gtk_widget_grab_focus(w);
+
+			send_status_message("Message sent successfully!");
+		}
+
+		/* XXX we should probably do the actual network stuff in a different
+		 * thread and have it call this once the message is actually sent. */
+		ssize_t nbytes;
+		if ((nbytes = send(sockfd,message,len,0)) == -1)
+			error("send failed");
+	}
+	pthread_mutex_unlock(&send_message_mutex);
+}
+
 //End of protocol functions
 
+//Main wrapper functions
 static const char* usage =
 "Usage: %s [OPTIONS]...\n"
 "Secure chat (CCNY computer security project).\n\n"
@@ -399,69 +476,37 @@ static void tsappend(char* message, char** tagnames, int ensurenewline)
 	gtk_text_buffer_delete_mark(tbuf,mark);
 }
 
-pthread_mutex_t send_message_mutex;
-int mutex_dummy=pthread_mutex_init(&send_message_mutex, NULL); //So I can initialize the mutex before main()
 
-static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* data */)
-{
+int MINE=0;
+int YOURS=1;
 
-	pthread_mutex_lock(&send_message_mutex); //I'm not sure GTK signals are in a queue, or threads, so we lock just in case
-
-	if(!issetup){ //Protocol is not setup so we can't do anything
-		send_message(STATUS, "Protocol is not set up yet...");
-	}else{
-
-		char* tags[2] = {"self",NULL};
-		tsappend("me: ",tags,0);
-
-		GtkTextIter mstart; /* start of message pointer */
-		GtkTextIter mend;   /* end of message pointer */
-		gtk_text_buffer_get_start_iter(mbuf,&mstart);
-		gtk_text_buffer_get_end_iter(mbuf,&mend);
-		char* message = gtk_text_buffer_get_text(mbuf,&mstart,&mend,1);
-		size_t len = g_utf8_strlen(message,-1);
-
-		encodeInt(len, packet_buf); //Encode the length of the message
-		memcpy(packet_buf+NUMLEN, message, min(len, MESSAGELEN)); //Copy the message (however, to avoid overflow, copy at most MESSAGELEN bytes. We are not copying the NUL terminator, though so the other end needs to add it back to display it)
-
-		sha256_hash(packet_buf, NUMLEN+MESSAGELEN, packet_buf+(packet_buf_len-(NUMLEN+HASHLEN))); //Hash the plaintext to ensure (plaintext) integrity
-		encodeInt(structs[MINE].counter, packet_buf+(packet_buf_len-(NUMLEN))); //Encode the message counter
-
-		aes_encrypt(packet_buf, packet_buf_len, send_buf); //Encrypt message
-
-		int ret=sendMsg(send_buf, send_buf_len,1); //Send message. The 1 at the end tells it to return a -1 upon error, instead of a pthread_exit
-
-		if (ret==-1){
-			pthread_cancel(protocol_thread); //Cancel the protocol thread.
-			send_message(STATUS, "Message failed to send");
-		}else{
-			tsappend(message,NULL,1);
-			free(message);
-			/* clear message text and reset focus */
-			gtk_text_buffer_delete(mbuf,&mstart,&mend);
-			gtk_widget_grab_focus(w);
-
-			send_message(STATUS, "Message sent successfully!");
-		}
-
-		/* XXX we should probably do the actual network stuff in a different
-		 * thread and have it call this once the message is actually sent. */
-		ssize_t nbytes;
-		if ((nbytes = send(sockfd,message,len,0)) == -1)
-			error("send failed");
+void send_status_message(char* msg){
+	while(!g_main_context_acquire(NULL)){
+		continue;
 	}
-	pthread_mutex_unlock(&send_message_mutex);
-}
 
-static gboolean shownewmessage(gpointer msg)
+	char* tags[2]={"status", NULL};
+	tsappend(msg tags, 1);
+
+	g_main_context_release(NULL);
+
+void show_new_message(char* msg, int length)
 {
+	while(!g_main_context_acquire(NULL)){
+		continue;
+	}
 	char* tags[2] = {"friend",NULL};
 	char* friendname = "mr. friend: ";
 	tsappend(friendname,tags,0);
-	char* message = (char*)msg;
+
+	char* message=malloc(length+1);
+	memcpy(message, msg, length);
+	message[length]='\0';
+
 	tsappend(message,NULL,1);
 	free(message);
-	return 0;
+
+	g_main_context_release(NULL);
 }
 
 void _strcpy(char** dst, char* src){
@@ -514,8 +559,6 @@ int main(int argc, char *argv[])
 	char c;
 	int opt_index = 0;
 	char* generate=NULL;
-
-	//char hostname[HOST_NAME_MAX+1] = ""; For NetworkStruct->hostname
 	
 	while ((c = getopt_long(argc, argv, "csn:p:hm:y:g:", long_opts, &opt_index)) != (char)(-1)) {
 		switch (c) {
@@ -531,7 +574,7 @@ int main(int argc, char *argv[])
 					exit(1);
 				}
 				
-				memcpy(args.hostname,optarg, len+1);
+				memcpy(network_params.hostname,optarg, len+1);
 				break;
 			case 'c':
 				break; //Nothing to do here
@@ -539,7 +582,7 @@ int main(int argc, char *argv[])
 				isclient = 0;
 				break;
 			case 'p':
-				args.port = atoi(optarg);
+				network_params.port = atoi(optarg);
 				break;
 			case 'g':
 				_strcpy(&generate, optarg);
@@ -558,16 +601,12 @@ int main(int argc, char *argv[])
 				return 1;
 		}
 	}
-	/* NOTE: might want to start this after gtk is initialized so you can
-	 * show the messages in the main window instead of stderr/stdout.  If
-	 * you decide to give that a try, this might be of use:
-	 * https://docs.gtk.org/gtk4/func.is_initialized.html */
 
 	if (generate!=NULL){
 		rsa_generate_keys(generate,dh_get_params().p); //Generates, then saves to keyPath. Makes sure that len(n)>2*len(dh_p)
 		exit(0);
 	}else{
-		rsa_load_keys(structs[MINE],1); //MINE=0. structs is an array of structs. 1 indicates load both private (0 means public). Should error at any error.
+		rsa_load_keys(structs[MINE],1); //1 indicates load both private (0 means public). Should error at any error.
 		
 		rsa_load_keys(structs[YOURS],0);
 	}
@@ -616,13 +655,13 @@ int main(int argc, char *argv[])
 	//Start network thread
 	int ret;
 	if (isclient) {
-		if (!strcmp(args.hostname, "")){
-			sprintf(args.hostname, "localhost");
+		if (!strcmp(network_params.hostname, "")){
+			sprintf(network_params.hostname, "localhost");
 		}
 		ret=pthread_create(&network_thread,0,initClientNet, 0);
 	} else {
 		if (!strcmp(hostname, "")){
-			sprintf(args.hostname, "127.0.0.1");
+			sprintf(network_params.hostname, "127.0.0.1");
 		}
 		ret=pthread_create(&network_thread,0,initServerNet, 0);
 	}
@@ -634,30 +673,5 @@ int main(int argc, char *argv[])
 	gtk_main();
 
 	shutdownNetwork();
-	return 0;
-}
-
-/* thread function to listen for new messages and post them to the gtk
- * main loop for processing: */
-void* recvMsg(void*)
-{
-	size_t maxlen = 512;
-	char msg[maxlen+2]; /* might add \n and \0 */
-	ssize_t nbytes;
-	while (1) {
-		if ((nbytes = recv(sockfd,msg,maxlen,0)) == -1)
-			error("recv failed");
-		if (nbytes == 0) {
-			/* XXX maybe show in a status message that the other
-			 * side has disconnected. */
-			return 0;
-		}
-		char* m = malloc(maxlen+2);
-		memcpy(m,msg,nbytes);
-		if (m[nbytes-1] != '\n')
-			m[nbytes++] = '\n';
-		m[nbytes] = 0;
-		g_main_context_invoke(NULL,shownewmessage,(gpointer)m);
-	}
 	return 0;
 }
