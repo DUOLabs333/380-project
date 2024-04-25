@@ -35,25 +35,32 @@ void* recvMsg(void*);       /* for trecv */
 /* network stuff... */
 
 static int listensock, sockfd;
-static int isclient = 1;
-
+int isclient = 1;
+int is
 static void error(const char *msg)
 {
 	perror(msg);
 	exit(EXIT_FAILURE);
 }
 
+int keylen=Z2SIZE(dh_params.p)-1;
+int keybuf=malloc(keylen);
+
 #define _CONCAT(a,b) a##b
 #define CONCAT(a,b) _CONCAT(a,b)
 
-#define NEWBUF(name, len) \
+#define _INITBUF(name, len) \
 	int CONCAT(name,_buf_len)=len;\
-	char* CONCAT(name,_buf)=malloc(CONCAT(name,_buf_len));\
+	char* CONCAT(name,_buf)=malloc(CONCAT(name,_buf_len));
+
+#define INITBUF(name,len) _INITBUF(name, len)
+#define NEWBUF(name, len) \
+	INITBUF(name, len)\
 	memset(CONCAT(name,_buf),0,CONCAT(name,_buf_len));\
 	pthread_cleanup_push(free, CONCAT(name,_buf));
 
 
-void serverSetup(char* key, int keylen){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
+void serverSetup(){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
 	NEWBUF(hello, 4);
 	
 	send_message(STATUS, "Waiting for initial HELLO");
@@ -61,7 +68,7 @@ void serverSetup(char* key, int keylen){ //This is the setup protocol that will 
 	int ret;
 	while(1){
 	recvMsg(hello_buf, hello_buf_len); //If recvMsg gets a -1, call pthread_exit() in recvMsg
-	if(strncmp(buf,"HELLO", hello_buf_len)){ //You must get a "HELLO" to continue
+	if(strncmp(hello_buf,"HELLO", hello_buf_len)){ //You must get a "HELLO" to continue
 		continue;
 	}
 
@@ -117,7 +124,7 @@ void serverSetup(char* key, int keylen){ //This is the setup protocol that will 
 
 }
 
-void clientSetup(char* key, int keylen){
+void clientSetup(){
 
 	NEWBUF(hello, 4);
 	memcpy(hello_buf, "HELLO", 4);
@@ -174,24 +181,66 @@ void clientSetup(char* key, int keylen){
 }
 
 
-void networkMain(){
-	int keylen=Z2SIZE(dh_params.p)-1; //Just in case Z2SIZE overestimates the amount of bytes (Z2SIZE overapproximates by at most one. See here: https://gmplib.org/manual/Integer-Import-and-Export)
-
-	char* keybuf=malloc(keylen);
-	
+void reset_setup(void*){
 	issetup=0;
+}
+
+#define HASHLEN 32
+#define NUMLEN 8 //All integer values send/recived are this long
+#define MESSAGELEN 4096 
+
+int PACKETLEN=NUMLEN+MESSAGELEN+HASHLEN+NUMLEN;
+
+INITBUF(packet, PACKETLEN);
+
+INITBUF(send, packet_buf_len);
+
+INITBUF(recv, send_buf_len);
+	
+INITBUF(dec, recv_buf_len);
+	
+INITBUF(hash, HASHLEN);
+void recieveMessages(){
+	while(1){
+		recvMsg(recv_buf, recv_buf_len);
+		send_message(STATUS, "Recieved packet...");
+		aes_decrypt(keybuf, keylen, recv_buf, recv_buf_len, dec_buf, dec_buf_len);
+		sha256_hash(dec_buf, dec_buf_len, hash_buf);
+		if(memcmp(dec_buf+NUMLEN+MESSAGELEN, hash_buf, hash_buf_len)){
+			send_message(STATUS, "Hashes do not match...");
+			continue;
+		}
+//send_message has overloads, one without length, and one with. send_message copies into its own buffer
+		if(decodeInt(dec_buf+(dec_buf_len-NUMLEN))!=structs[YOURS].counter){
+			send_message(STATUS, "Counter values do not match");
+			continue;
+		}
+
+		send_message(YOURS, dec_buf+NUMLEN, min(decodeInt(dec_buf), MESSAGELEN));
+		structs[YOURS].counter++;
+
+	}
+
+}
+
+void networkMain(){
+	pthread_cleanup_push(reset_setup,NULL); //When the connection is broken, the connection can no longer be considered "set up", can it?
+
 	if (isclient){
-		clientSetup(keybuf, keylen);
+		clientSetup();
 	}else{
-		serverSetup(keybuf, keylen);
+		serverSetup();
 	}
 	send_message(STATUS, "Setup successful. Moving to main messaging protocol..."); 
 	issetup=1;
+	recieveMessages();
 	messagingProtocol(keybuf, keylen); //Instead, have a boolean issetup. If it is 0, just drop the message, else, start doing the actual protocol. Additionally, instead of messagingProtocol, have recieveMessage, which just does recvmsg in a loop, and decrypts. sendMessage should have a lock (I'm not sure whether gtk signals are single-threaded or multi-threaded)
 }
 
 // Start of network-related functions
 //Don't just accept first one --- once the connection ends (you can check using this: https://stackoverflow.com/a/1795562), accept the next one, and start protocol over
+
+pthread_t main_network_thread;
 int initServerNet(void*)
 {
 	int reuse = 1;
@@ -225,8 +274,8 @@ int initServerNet(void*)
 		}
 		send_message(STATUS, "Connection made, starting session...");
 
-		pthread_t t;
-		pthread_create(&t, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
+
+		pthread_create(&main_network_thread, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
 		pthread_join(t, NULL);
 
 		send_message(STATUS, "Client has disconnected, waiting for another connection...");
@@ -262,7 +311,7 @@ static int initClientNet(void*)
 		}
 		
 		pthread_t t;
-		pthread_create(&t, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
+		pthread_create(&main_network_thread, 0, networkMain,0); //This is to allow us to use pthread_exit in another function while running serverMain
 		pthread_join(t, NULL);
 
 		send_message(STATUS, "Server has disconnected, trying to connect again...");
@@ -330,28 +379,57 @@ static void tsappend(char* message, char** tagnames, int ensurenewline)
 	gtk_text_buffer_delete_mark(tbuf,mark);
 }
 
-//Split sendMessage into sendMsg and showMessage. Same thing with recieve
+pthread_mutex_t send_message_mutex;
+int mutex_dummy=pthread_mutex_init(&send_message_mutex, NULL); //So I can initialize the mutex before main()
+
 static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* data */)
 {
+
+	pthread_mutex_lock(&send_message_mutex);
+
+	if(!issetup){ //Is not setup so we can't do anything
+		send_message(STATUS, "Protocol is not set up yet...");
+		return;
+	}
+
 	char* tags[2] = {"self",NULL};
 	tsappend("me: ",tags,0);
+
 	GtkTextIter mstart; /* start of message pointer */
 	GtkTextIter mend;   /* end of message pointer */
 	gtk_text_buffer_get_start_iter(mbuf,&mstart);
 	gtk_text_buffer_get_end_iter(mbuf,&mend);
 	char* message = gtk_text_buffer_get_text(mbuf,&mstart,&mend,1);
 	size_t len = g_utf8_strlen(message,-1);
+
+	encodeInt(len, packet_buf); //Encode the length of the message
+	memcpy(packet_buf+NUMLEN, message, min(len, MESSAGELEN)); //Copy the message (however, to avoid overflow, copy at most MESSAGELEN bytes. We are not copying the NUL terminator, though so the other end needs to add it back)
+
+	sha256_hash(packet_buf, NUMLEN+MESSAGELEN, packet_buf+(packet_buf_len-(NUMLEN+HASHLEN))); //Hash the plaintext to ensure (plaintext) integrity
+	encodeInt(structs[MINE].counter, packet_buf+(packet_buf_len-(NUMLEN))); //Encode the message counter
+
+	aes_encrypt(packet_buf, packet_buf_len, send_buf); //Encrypt message
+
+	int ret=sendMsg(send_buf, send_buf_len,1); //Send message. The 1 at the end tells it to return a -1 upon error, instead of a pthread_exit
+
+	if (ret==-1){
+		pthread_cancel(main_network_thread); //Cancel the main network thread.
+	}else{
+		send_message(MINE, message, 0); //The 1 means that the message is not NUL-terminated
+		//tsappend(message,NULL,1);
+		free(message);
+		/* clear message text and reset focus */
+		gtk_text_buffer_delete(mbuf,&mstart,&mend);
+		gtk_widget_grab_focus(w);
+	}
+
+	return;
+
 	/* XXX we should probably do the actual network stuff in a different
 	 * thread and have it call this once the message is actually sent. */
 	ssize_t nbytes;
 	if ((nbytes = send(sockfd,message,len,0)) == -1)
 		error("send failed");
-
-	tsappend(message,NULL,1);
-	free(message);
-	/* clear message text and reset focus */
-	gtk_text_buffer_delete(mbuf,&mstart,&mend);
-	gtk_widget_grab_focus(w);
 }
 
 static gboolean shownewmessage(gpointer msg)
@@ -374,10 +452,11 @@ void set_key_path(int index, char* fn){
 
 int main(int argc, char *argv[])
 {
-	if (init("params") != 0) {
+	if (dh_init("params") != 0) {
 		fprintf(stderr, "could not read DH params from file 'params'\n");
 		return 1;
 	}
+
 	// define long options
 	static struct option long_opts[] = {
 		{"client",  no_argument, 0, 'c'},

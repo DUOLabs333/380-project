@@ -70,10 +70,10 @@ With all of that out of the way, let's finally move on to describe the actual pr
 
 		Eventually the counters will overflow, and Mal will be able to do a replay attack. However, this is likely not to be a problem for two reasons: one, 2^64 is ~18 quintillion, which is (much) more than the number of messages that are likely to be sent in one session; and two, even if Mal can successfully execute a replay attack, the worst that will happen is that correspondent Y will see a message twice, which is a low-impact vulnerability (especially since it can only happen once every 18 quintillion messages).
 			To reduce the probability of the occurrence of this vulnerability even further, instead of a counter, a random nonce can be used, with each message telling the other correspondent what the next nonce will be (so correspondents don't need to keep track of every single nonce ever sent). To be clear, this idea has the same fundamental issue as the deterministic counter --- limited space for valid values --- however, this would be better, as the nonces would be unpredictable, so Mal would not know when she can successfully execute a replay attack. 
-			An alternative way of lowering the probabilities of replay attacks is by appending a timestamp to the message. With a timestamp, not only does Mal have to get the counter value right, but also the timestamp. The chance of an overflow is still possible, but now highly unlikely --- a correspondent would not only need to send 18 quintillion messages, but 18 quintillion messages per second (as timestamps commonly have second-level granularity), which is almost impossible.
+			An alternative way of lowering the probabilities of replay attacks is by appending a timestamp to the message. With a timestamp, not only does Mal have to get the counter value right, but also the timestamp. The chance of an attack from an overflow is still possible, but now highly unlikely --- a correspondent would not only need to send 18 quintillion messages, but 18 quintillion messages per second (as timestamps commonly have second-level granularity), which is almost impossible.
 
-	1. A correspondent X sends Base64(Enc_{sk}(Message||Hash(Message)||mine)), and increments mine.
-		Base64 is used because the length is implicitly encoded as NULL-terminated
+	1. A correspondent X sends Enc_{sk}(len(message)||Message||Hash(Message)||mine), and increments mine.
+		0<= len(message) <= 4096
 		
 		Hash (likely SHA-256) is used for integrity-checking.
 	
@@ -83,7 +83,7 @@ With all of that out of the way, let's finally move on to describe the actual pr
 
 	*NOTE*: If at any point during messaging, a check fails, the correspondent silently ignores the message --- if Mal knows that her message caused an error, it is possible that she can use it to figure out something about sk.
 
-An astute observer may notice a potential fatal flaw with this protocol --- since `chat` can send messages of arbitrary length, Mal (or a malicious correspondent) can send a very long message, which will cause the other correspondent to run out of memory trying to hold the entire message.
-	This is an inherent flaw in any messaging protocol that allows for arbitrary-length messages, and this problem can not be fixed.
+	An eagle-eyed reader may notice we are MAC-then-encrypting, which is almost universally denounced as bad, as it opens one up to an timing-oracle attack. However, this (should) does not apply here, as nothing is sent back over the connection, regardless of the success of decrypting. Therefore, there's nothing Mal can use to conclude whether her forged message was valid or not.
 
-	The only way to solve this issue is to limit the length of messages. However, since this concern does not affect the security/privacy of the messages themselves, this implementation of `chat` makes no attempt to limit message length. 
+The length of the messages a correspondent can send is limited to avoid Mal (or a malicious correspondent) from DDosing a correspondent by sending a long enough message to cause them to run out of memory.
+	Luckily, even though the length of an individual message is limited, this can be built on top of to allow for sending messages of arbitrary length: A message is delimited when len(message) for one "packet" < 4096.
