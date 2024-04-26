@@ -1,8 +1,7 @@
 #include <arpa/inet.h>
-#include <bits/getopt_core.h>
-#include <bits/getopt_ext.h>
 #include <gtk/gtk.h>
 #include <glib/gunicode.h> /* for utf8 strlen */
+#include <limits.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -13,8 +12,8 @@
 #include <getopt.h>
 #include "dh.h"
 #include "keys.h"
-#include "rsa.h"
 #include "aes.h"
+#include "sha.h"
 
 
 #define _CONCAT(a,b) a##b
@@ -32,6 +31,7 @@
 #endif
 
 #include "z.h"
+#include "rsa.h"
 
 static GtkTextBuffer* tbuf; /* transcript buffer */
 static GtkTextBuffer* mbuf; /* message buffer */
@@ -46,10 +46,9 @@ struct NetworkStruct
 	int port;
 };
 
-struct ProtocolStruct
-{
-	char *keyPath;
-	RSA_KEY *key;
+struct ProtocolStruct{
+	char* keyPath;
+	RSA_KEY key;
 	unsigned long long counter;
 };
 
@@ -59,10 +58,7 @@ int YOURS = 1;
 struct ProtocolStruct structs[2] = {0};
 struct NetworkStruct network_params = {.port = 1337};
 
-#define min(a, b) \
-	({ typeof(a) _a = a;    \
-	 typeof(b) _b = b;    \
-	 _a > _b ? _b : _a; })
+
 
 static void error(const char *msg)
 {
@@ -187,7 +183,7 @@ void *initServerNet(void *)
 	if (bind(listensock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
 		error("ERROR on binding");
 
-	char status_string[80]; // Should be long enough --- TCP ports only go up to 65535, and IP addresses have <=15 characters.
+	char status_string[100]; //Should be long enough --- TCP ports only go up to 65535, and IP addresses have <=15 characters.
 	sprintf(status_string, "Listening on %s:%i...", network_params.hostname, network_params.port);
 	send_status_message(status_string);
 
@@ -230,8 +226,8 @@ void *initClientNet(void *)
 	serv_addr.sin_family = AF_INET;
 	memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
 	serv_addr.sin_port = htons(network_params.port);
-
-	char status_string[80];
+	
+	char status_string[100];
 	sprintf(status_string, "Connecting to %s:%i...", network_params.hostname, network_params.port);
 	send_status_message(status_string);
 
@@ -267,72 +263,9 @@ int shutdownNetwork()
 	return 0;
 }
 
-// End of network functions
+//End of network functions 
 
-void sha256_hash(const unsigned char *input, size_t input_len, unsigned char *output)
-{
-	EVP_MD_CTX *mdctx;
-
-	if ((mdctx = EVP_MD_CTX_new()) == NULL)
-		perror("Failed to create EVP_MD_CTX");
-
-	if (1 != EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL))
-		perror("Failed to init digest");
-
-	if (1 != EVP_DigestUpdate(mdctx, input, input_len))
-		perror("Failed to update digest");
-
-	unsigned int output_len;
-	if (1 != EVP_DigestFinal_ex(mdctx, output, &output_len))
-		perror("Failed to finalize digest");
-
-	EVP_MD_CTX_free(mdctx);
-}
-
-void BYTES2Z(const unsigned char *bytes, size_t len, mpz_t z)
-{
-	mpz_import(z, len, 1, sizeof(bytes[0]), 0, 0, bytes);
-}
-
-size_t Z2BYTES(const mpz_t z, unsigned char *bytes, size_t max_len)
-{
-	size_t count;
-	mpz_export(bytes, &count, 1, sizeof(bytes[0]), 0, 0, z);
-	return count;
-}
-
-// Declaration of Z2NEWBYTES function
-// Define a default size value for the buffer
-#define DEFAULT_SIZE_VALUE 256 // You can adjust this to the appropriate default size
-
-// Original function with default value for size parameter
-#include <stdarg.h>
-
-// Define a default size value for the buffer
-#define DEFAULT_SIZE_VALUE 256 // You can adjust this to the appropriate default size
-
-// Modified function with variable number of arguments
-void Z2NEWBYTES(const mpz_t z, size_t size)
-{
-	unsigned char *buf = (unsigned char *)malloc(size);
-	if (!buf)
-	{
-		perror("Failed to allocate memory");
-		exit(EXIT_FAILURE);
-	}
-
-	size_t written = 0;
-	mpz_export(buf, &written, 1, 1, 0, 0, z);
-	// handle the buffer, e.g., encrypt or hash it
-
-	free(buf);
-}
-
-size_t Z2SIZE(const mpz_t z)
-{
-	return (mpz_sizeinbase(z, 2) + CHAR_BIT - 1) / CHAR_BIT;
-}
-
+//Protocol functions
 int isclient = 1;
 int issetup = 0;
 
@@ -348,21 +281,21 @@ const int PACKETLEN = NUMLEN + MESSAGELEN + HASHLEN + NUMLEN;
 const int packet_buf_len = PACKETLEN;
 char *packet_buf; // The unencrypted bytes that will be sent
 
-const int send_buf_len = packet_buf_len;
-char *send_buf; // The encrypted bytes that will be sent
+const int send_buf_len=packet_buf_len+AES_IV_LEN;
+char* send_buf; //The encrypted bytes that will be sent
 
 const int recv_buf_len = send_buf_len;
 char *recv_buf; // The encrypted bytes recieved
 
-const int dec_buf_len = recv_buf_len;
-char *dec_buf; // The decrypted bytes recieved
+const int dec_buf_len=packet_buf_len;
+char* dec_buf; //The decrypted bytes recieved
 
 const int hash_buf_len = HASHLEN;
 char *hash_buf;
 
-// Protocol functions
-void serverSetup()
-{ // This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
+RSA_KEY* mineRSA;
+RSA_KEY* yoursRSA;
+void serverSetup(){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
 	NEWBUF(hello, 4);
 
 	send_status_message("Waiting for initial HELLO");
@@ -384,14 +317,14 @@ void serverSetup()
 
 	send_status_message("Created mine part for Diffie-Hellman");
 
-	RSA_KEY *mineRSA = structs[MINE].key;
-	RSA_KEY *yoursRSA = structs[YOURS].key;
+	
 
-	Z2NEWBYTES(g_a, Z2SIZE(dh_get_params('p'))); // Creates new buffer *_buf, along with *_buf_len with size equal to provided size (use NEWBUF).
+	Z2NEWBUF(g_a, dh_p_len);
 
-	Z2NEWBYTES(g_a, Z2SIZE(dh_get_params('p'))); //Creates new buffer *_buf, along with *_buf_len with size equal to provided size (use NEWBUF).
 
-	rsa_encrypt(structs[YOURS].key, g_a_buf, g_a_buf_len, enc_b_buf, enc_b_buf_len); // Enc_{PkB}(g^a mod p)
+	NEWBUF(enc_b, Z2SIZE(yoursRSA->n)); //Every RSA encrypted message is as big as K->n
+
+	rsa_encrypt(yoursRSA, g_a_buf, g_a_buf_len, enc_b_buf); //Enc_{PkB}(g^a mod p)
 
 	sendMsg(enc_b_buf, enc_b_buf_len, 0);
 
@@ -401,7 +334,7 @@ void serverSetup()
 
 	NEWBUF(dec_a, enc_a_buf_len);
 
-	rsa_decrypt(structs[MINE].key, enc_a_buf, enc_a_buf_len, dec_a_buf, dec_a_buf_len);
+	rsa_decrypt(mineRSA, enc_a_buf, enc_a_buf_len, dec_a_buf, dec_a_buf_len);
 
 	if (memcmp(dec_a_buf, g_a_buf, g_a_buf_len))
 	{
@@ -414,17 +347,19 @@ void serverSetup()
 	int g_b_buf_len = g_a_buf_len;
 	char *g_b_buf = dec_a_buf + g_a_buf_len;
 	BYTES2Z(g_b_buf, g_b_buf_len, g_b);
+	
+	rsa_encrypt(mineRSA, g_b_buf, g_b_buf_len, enc_b_buf); //Enc_{PkB}(g^b mod p)
 
-	rsa_encrypt(structs[YOURS].key, g_b_buf, g_b_buf_len, enc_b_buf, enc_b_buf_len); // Enc_{PkB}(g^b mod p)
-
-	sendMsg(enc_b_buf, enc_b_buf_len, 0);
-
-	dhFinal(a, g_a, g_b, keybuf, keylen);
-
+	sendMsg(enc_b_buf, enc_b_buf_len,0 );
+	
+	dhFinal(a, g_a, g_b, keybuf, min(dh_p_len-1, keylen));
+	
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+
 }
 
 void clientSetup()
@@ -437,40 +372,39 @@ void clientSetup()
 	sendMsg(hello_buf, hello_buf_len, 0);
 
 	send_status_message("Recieved a HELLO");
-
-	RSA_KEY *mineRSA = structs[MINE].key;
-	RSA_KEY *yoursRSA = structs[YOURS].key;
-
+	
+	
 	NEWBUF(enc_b, Z2SIZE(mineRSA->n));
 
 	recvMsg(enc_b_buf, enc_b_buf_len);
 
-	NEWBUF(g_a, Z2SIZE(dh_get_params('p')));
+	NEWBUF(g_a, dh_p_len);
 
-	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_a_buf, g_a_buf_len);
+	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_a_buf,g_a_buf_len);
+
 
 	NEWZ(b);
 	NEWZ(g_b);
 	dhGen(b, g_b);
 	send_status_message("Created yours part for Diffie-Hellman");
 
-	Z2NEWBUF(g_b, Z2SIZE(dh_get_params('p')); //Creates new buffer *_buf, along with *_buf_len
+	Z2NEWBUF(g_b, dh_p_len);
 
 	NEWBUF(g_a_g_b, Z2SIZE(yoursRSA->n));
 
-	memcpy(g_a_b_buf, g_a_buf, g_a_buf_len);
-	memcpy(g_a_g_b_buf + g_a_buf_len, g_b_buf, g_b_buf_len);
-
+	memcpy(g_a_g_b_buf, g_a_buf, g_a_buf_len);
+	memcpy(g_a_g_b_buf+g_a_buf_len, g_b_buf, g_b_buf_len);
+	
 	NEWBUF(enc_a, Z2SIZE(yoursRSA->n));
 
-	rsa_encrypt(structs[YOURS].key, g_a_g_b_buf, g_a_g_b_buf_len, enc_a_buf, enc_a_buf_len);
-	sendMsg(enc_a_buf, enc_a_buf_len, 0);
+	rsa_encrypt(yoursRSA, g_a_g_b_buf, g_a_g_b_buf_len, enc_a_buf);
+	sendMsg(enc_a_buf,enc_a_buf_len, 0);
 
 	recvMsg(enc_b_buf, enc_b_buf_len);
 
 	NEWBUF(g_b_a, g_a_buf_len);
 
-	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
+	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
 
 	if (memcmp(g_b_a_buf, g_b_buf, g_b_buf_len))
 	{
@@ -480,8 +414,9 @@ void clientSetup()
 
 	NEWZ(g_a);
 	BYTES2Z(g_a_buf, g_a_buf_len, g_a);
-	dhFinal(b, g_b, g_a, keybuf, keylen);
+	dhFinal(b, g_b, g_a, keybuf, min(dh_p_len-1, keylen));
 
+	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -490,22 +425,42 @@ void clientSetup()
 	pthread_cleanup_pop(1);
 }
 
-void recieveMessages()
-{
-	while (1)
-	{
+
+void encodeInt(unsigned long long val, char* buf){
+	for(int i=0; i < NUMLEN; i++){
+		buf[i]=(val >> CHAR_BIT*i) & 0xFF;
+	}
+}
+
+unsigned long long decodeInt(char* buf){
+	unsigned long long val=0;
+
+	for(int i=0; i < NUMLEN; i++){
+		val |= (buf[i] << CHAR_BIT*i);
+	}
+
+	return val;
+}
+
+void recieveMessages(){
+	int ret;
+	while(1){
 		recvMsg(recv_buf, recv_buf_len);
 		send_status_message("Recieved packet...");
-		aes_decrypt(keybuf, keylen, recv_buf, recv_buf_len, dec_buf, dec_buf_len);
+		ret=aes_decrypt(keybuf, (unsigned char*)recv_buf, (unsigned char*)dec_buf, dec_buf_len);
+
+		if (ret==-1){
+			pthread_exit(NULL);
+		}
+
 		sha256_hash(dec_buf, dec_buf_len, hash_buf);
 		if (memcmp(dec_buf + NUMLEN + MESSAGELEN, hash_buf, hash_buf_len))
 		{
 			send_status_message("Hashes do not match...");
 			continue;
 		}
-		// send_message has overloads, one without length, and one with. send_message copies into its own buffer
-		if (decodeInt(dec_buf + (dec_buf_len - NUMLEN)) != structs[YOURS].counter)
-		{
+
+		if(decodeInt(dec_buf+(dec_buf_len-NUMLEN))!=structs[YOURS].counter){
 			send_status_message("Counter values do not match");
 			continue;
 		}
@@ -572,9 +527,9 @@ static void sendMessage(GtkWidget *w /* <-- msg entry widget */, gpointer /* dat
 		sha256_hash(packet_buf, NUMLEN + MESSAGELEN, packet_buf + (packet_buf_len - (NUMLEN + HASHLEN))); // Hash the plaintext to ensure (plaintext) integrity
 		encodeInt(structs[MINE].counter, packet_buf + (packet_buf_len - (NUMLEN)));						  // Encode the message counter
 
-		aes_encrypt(packet_buf, packet_buf_len, send_buf); // Encrypt message
+		aes_encrypt((unsigned char*)keybuf, (unsigned char*)packet_buf, packet_buf_len, (unsigned char *)send_buf); //Encrypt message
 
-		int ret = sendMsg(send_buf, send_buf_len, 1); // Send message. The 1 at the end tells it to return a -1 upon error, instead of a pthread_exit
+		int ret=sendMsg(send_buf, send_buf_len,1); //Send message
 
 		if (ret == -1)
 		{
@@ -592,11 +547,6 @@ static void sendMessage(GtkWidget *w /* <-- msg entry widget */, gpointer /* dat
 			send_status_message("Message sent successfully!");
 		}
 
-		/* XXX we should probably do the actual network stuff in a different
-		 * thread and have it call this once the message is actually sent. */
-		ssize_t nbytes;
-		if ((nbytes = send(sockfd, message, len, 0)) == -1)
-			error("send failed");
 	}
 	pthread_mutex_unlock(&send_message_mutex);
 }
@@ -651,11 +601,12 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "could not read DH params from file 'params'\n");
 		return 1;
 	}
-
-	// Initialization of global objects
-	keylen = Z2SIZE(dh_get_params('p')) - 1;
-	keybuf = malloc(keylen);
-
+	
+	//Initialization of global objects
+	keylen=AES_KEY_LEN;
+	keybuf=malloc(keylen);
+	memset(keybuf, 0, keylen);
+	
 	pthread_mutex_init(&send_message_mutex, NULL);
 
 	packet_buf = malloc(packet_buf_len);
@@ -671,12 +622,13 @@ int main(int argc, char *argv[])
 		{"client", no_argument, 0, 'c'},
 		{"server", no_argument, 0, 's'},
 		{"hostname", required_argument, 0, 'n'}, //'h' was already taken
-		{"port", required_argument, 0, 'p'},
-		{"mine-keys", required_argument, 0, 'm'},
-		{"yours-keys", required_argument, 0, 'y'},
-		{"generate", no_argument, 0, 'g'},
-		{"help", no_argument, 0, 'h'},
-		{0, 0, 0, 0}};
+		{"port",     required_argument, 0, 'p'},
+		{"mine-key", required_argument, 0, 'm'},
+		{"yours-key", required_argument, 0, 'y'},
+		{"generate", required_argument, 0, 'g'},
+		{"help",     no_argument,       0, 'h'},
+		{0,0,0,0}
+	};
 	// process options:
 	char c;
 	int opt_index = 0;
@@ -694,60 +646,75 @@ int main(int argc, char *argv[])
 				exit(1);
 			}
 
-			if (len == HOST_NAME_MAX && optarg[HOST_NAME_MAX] != '\0')
-			{
-				fprintf(stderr, "Your hostname is too long!\n");
-				exit(1);
-			}
-
-			memcpy(network_params.hostname, optarg, len + 1);
-			break;
-		case 'c':
-			break; // Nothing to do here
-		case 's':
-			isclient = 0;
-			break;
-		case 'p':
-			network_params.port = atoi(optarg);
-			break;
-		case 'g':
-			_strcpy(&generate, optarg);
-			break;
-		case 'm':
-			_strcpy(&(structs[MINE].keyPath), optarg);
-			break;
-		case 'y':
-			_strcpy(&(structs[YOURS].keyPath), optarg);
-			break;
-		case 'h':
-			printf(usage, argv[0]);
-			return 0;
-		case '?':
-			printf(usage, argv[0]);
-			return 1;
+				if (len==HOST_NAME_MAX && optarg[HOST_NAME_MAX]!='\0'){
+					fprintf(stderr,"Your hostname is too long!\n");
+					exit(1);
+				}
+				
+				memcpy(network_params.hostname,optarg, len+1);
+				break;
+				 
+			case 'c':
+				break; //Nothing to do here
+			case 's':
+				isclient = 0;
+				break;
+			case 'p':
+				network_params.port = atoi(optarg);
+				break;
+			case 'g':
+				_strcpy(&generate, optarg);
+				break;
+			case 'm':
+				_strcpy(&(structs[MINE].keyPath), optarg);
+				break;
+			case 'y':
+				_strcpy(&(structs[YOURS].keyPath), optarg);
+				break;
+			case 'h':
+				printf(usage,argv[0]);
+				return 0;
+			case '?':
+				printf(usage,argv[0]);
+				return 1;
 		}
 	}
 
-	if (generate != NULL)
-	{
-		rsa_generate_keys(generate, dh_get_params('p')); // Generates, then saves to keyPath. Makes sure that len(n)>2*len(dh_p)
+	if (generate!=NULL){
+		rsa_generate_keys(generate,dh_p_len);
 		exit(0);
-	}
-	else
-	{
-		rsa_load_keys(structs[MINE].key, 1); // 1 indicates load both private (0 means public). Should error at any error.
+	}else{
+		int ret;
 
-		rsa_load_keys(structs[YOURS].key, 0);
+		mineRSA=&(structs[MINE].key);
+		yoursRSA=&(structs[YOURS].key);
+
+		ret=rsa_load_keys(structs[MINE].keyPath,mineRSA,1);
+		if (ret==-1){
+			error("ERROR loading mine RSA key");
+		}
+
+		ret=rsa_load_keys(structs[YOURS].keyPath,yoursRSA,0);
+
+		if (ret==-1){
+			error("ERROR loading your RSA key");
+		}
 	}
 
 	/* setup GTK... */
-	GtkBuilder *builder;
-	GObject *window;
-	GObject *button;
-	GObject *transcript;
-	GObject *message;
-	GError *gerror = NULL;
-	gtk_init(&argc, &argv);
+	GtkBuilder* builder;
+	GObject* window;
+	GObject* button;
+	GObject* transcript;
+	GObject* message;
+	GError* gerror = NULL;
+	gboolean is_initialized;
+	
+	is_initialized=gtk_init_check(&argc, &argv);
+	if(!is_initialized){
+		error("ERROR GUI could not be started");
+	}
+
 	builder = gtk_builder_new();
 	if (gtk_builder_add_from_file(builder, "layout.ui", &gerror) == 0)
 	{
@@ -775,29 +742,20 @@ int main(int argc, char *argv[])
 											  GTK_STYLE_PROVIDER_PRIORITY_USER);
 
 	/* setup styling tags for transcript text buffer */
-	gtk_text_buffer_create_tag(tbuf, "status", "foreground", "#657b83", "font", "italic", NULL);
-	gtk_text_buffer_create_tag(tbuf, "friend", "foreground", "#6c71c4", "font", "bold", NULL);
-	gtk_text_buffer_create_tag(tbuf, "self", "foreground", "#268bd2", "font", "bold", NULL);
-
-	while (!gtk_is_initialized())
-	{ // Wait for GTK to initialize. It's not best practice to busy-loop instead of using some sort of signaling, but I don't care enough to figure that out
-	}
-
-	// Start network thread
+	gtk_text_buffer_create_tag(tbuf,"status","foreground","#657b83","font","italic",NULL);
+	gtk_text_buffer_create_tag(tbuf,"friend","foreground","#6c71c4","font","bold",NULL);
+	gtk_text_buffer_create_tag(tbuf,"self","foreground","#268bd2","font","bold",NULL);
+	
+	//Start network thread
 	int ret;
-	if (isclient)
-	{
-		if (!strcmp(network_params.hostname, ""))
-		{
-			sprintf(network_params.hostname, "localhost");
+	if (isclient) {
+		if (!strcmp(network_params.hostname, "")){
+			sprintf(network_params.hostname,"localhost");
 		}
-		ret = pthread_create(&network_thread, 0, initClientNet, 0);
-	}
-	else
-	{
-		if (!strcmp(network_params.hostname, ""))
-		{
-			sprintf(network_params.hostname, "127.0.0.1");
+		ret=pthread_create(&network_thread,0,initClientNet, 0);
+	} else {
+		if (!strcmp(network_params.hostname, "")){
+			sprintf(network_params.hostname,"127.0.0.1");
 		}
 		ret = pthread_create(&network_thread, 0, initServerNet, 0);
 	}

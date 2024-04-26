@@ -73,8 +73,8 @@ With all of that out of the way, let's finally move on to describe the actual pr
 			To reduce the probability of the occurrence of this vulnerability even further, instead of a counter, a random nonce can be used, with each message telling the other correspondent what the next nonce will be (so correspondents don't need to keep track of every single nonce ever sent). To be clear, this idea has the same fundamental issue as the deterministic counter --- limited space for valid values --- however, this would be better, as the nonces would be unpredictable, so Mal would not know when she can successfully execute a replay attack. 
 			An alternative way of lowering the probabilities of replay attacks is by appending a timestamp to the message. With a timestamp, not only does Mal have to get the counter value right, but also the timestamp. The chance of an overflow is still possible, but now highly unlikely --- a correspondent would not only need to send 18 quintillion messages, but 18 quintillion messages per second (as timestamps commonly have second-level granularity), which is almost impossible.
 
-	1. A correspondent X sends Base64(Enc_{sk}(Message||Hash(Message)||mine)), and increments mine.
-		Base64 is used because the length is implicitly encoded as NULL-terminated
+	1. A correspondent X sends IV||Enc_{sk}(len(message)||Message||Hash(Message)||mine), and increments mine.
+		0<= len(message) <= 4096
 		
 		Hash (likely SHA-256) is used for integrity-checking.
 	

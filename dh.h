@@ -16,7 +16,7 @@ extern "C" {
 #endif
 /* NOTE: you must call init or initFromScratch before doing anything else. */
 /** Try to read q,p,g from a file: */
-int init(const char* fname);
+int dh_init(const char* fname);
 /** Generate fresh Diffie Hellman parameters.  This is a somewhat
  * expensive computation, so it's best to save and reuse params.
  * Prints generated parameters to stdout. */
@@ -47,7 +47,7 @@ int dh3Final(mpz_t a, mpz_t A, mpz_t x, mpz_t X, mpz_t B, mpz_t Y,
 int dh3Finalk(dhKey* skA, dhKey* skX, dhKey* pkB, dhKey* pkY,
 		unsigned char* keybuf, size_t buflen);
 
-const mpz_t* dh_get_params(char param);
+#define dh_p_len pLen
 #ifdef __cplusplus
 }
 #endif
