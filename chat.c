@@ -301,59 +301,20 @@ size_t Z2BYTES(const mpz_t z, unsigned char *bytes, size_t max_len)
 #define DEFAULT_SIZE_VALUE 256 // You can adjust this to the appropriate default size
 
 // Modified function with variable number of arguments
-void Z2NEWBYTES(const mpz_t z, ...)
+void Z2NEWBYTES(const mpz_t z, size_t size)
 {
-	// Initialize variable arguments
-	va_list args;
-	va_start(args, z);
-
-	unsigned char *buf;
-	size_t size;
-
-	// Check if only one argument is provided
-	if (va_arg(args, int) == 0)
+	unsigned char *buf = (unsigned char *)malloc(size);
+	if (!buf)
 	{
-		// Default size value if only one argument is provided
-		size = DEFAULT_SIZE_VALUE;
-	}
-	else
-	{
-		// Retrieve the size argument
-		size = va_arg(args, size_t);
-	}
-
-	// Allocate memory for the buffer
-	buf = (unsigned char *)malloc(size);
-	if (buf == NULL)
-	{
-		// Handle allocation failure
-		fprintf(stderr, "Error: Failed to allocate memory for buffer in Z2NEWBYTES\n");
+		perror("Failed to allocate memory");
 		exit(EXIT_FAILURE);
 	}
 
-	// Convert the mpz_t value to bytes and store it in the buffer
-	memset(buf, 0, size); // Clear the buffer first
 	size_t written = 0;
 	mpz_export(buf, &written, 1, 1, 0, 0, z);
-	if (written < size)
-	{
-		memmove(buf + (size - written), buf, written); // Adjust for leading zeros
-		memset(buf, 0, size - written);				   // Zero-fill the rest
-	}
+	// handle the buffer, e.g., encrypt or hash it
 
-	// Use the buffer for further processing if needed
-	// Remember to free the buffer when done to avoid memory leaks
 	free(buf);
-
-	// Cleanup variable arguments
-	va_end(args);
-}
-
-// Overloaded function with two arguments
-void Z2NEWBYTES(const mpz_t z, size_t size)
-{
-	// Call the function with the provided size value
-	Z2NEWBYTES(z, size);
 }
 
 size_t Z2SIZE(const mpz_t z)
