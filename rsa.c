@@ -137,7 +137,7 @@ char* rsa_get_full_file_name(const char* fn, int priv){
 }
 
 
-void rsa_generate_keys(char* fn_prefix, mpz_t dh_p)
+void rsa_generate_keys(char* fn_prefix, size_t dh_p_len)
 {
 	RSA_KEY K;
 	rsa_initKey(&K);
@@ -146,7 +146,7 @@ void rsa_generate_keys(char* fn_prefix, mpz_t dh_p)
 	 
 	 NEWZ(p_q); //|p-q|
 	 
-	 int keyBytes=2*Z2SIZE(dh_p)+2; //Size of the key used (n). Has to be > 2*len(dh_p) and has to be even
+	 int keyBytes=2*dh_p_len+2; //Size of the key used (n). Has to be > 2*len(dh_p) and has to be even
 	 int pBytes=keyBytes/2; //Size of the prime numbers (p and q)
 	 
 	 //Compare p and q

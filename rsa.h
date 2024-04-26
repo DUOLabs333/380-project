@@ -10,7 +10,7 @@ typedef struct _RSA_KEY {
 	mpz_t d;
 } RSA_KEY;
 
-void rsa_generate_keys(char* fn_prefix, mpz_t dh_p);
+void rsa_generate_keys(char* fn_prefix, size_t dh_p_len);
 /* NOTE: inBuf, when interpreted as a integer, must be less than K->n */
 void rsa_encrypt(RSA_KEY* K,  char* inBuf, size_t len,  char* outBuf);
 

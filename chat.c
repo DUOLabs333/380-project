@@ -3,6 +3,7 @@
 #include <bits/getopt_ext.h>
 #include <gtk/gtk.h>
 #include <glib/gunicode.h> /* for utf8 strlen */
+#include <limits.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -302,7 +303,7 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 
 	
 
-	Z2NEWBUF(g_a, Z2SIZE(dh_get_params('p')));
+	Z2NEWBUF(g_a, dh_p_len);
 
 
 	NEWBUF(enc_b, Z2SIZE(yoursRSA->n)); //Every RSA encrypted message is as big as K->n
@@ -336,7 +337,7 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 
 	sendMsg(enc_b_buf, enc_b_buf_len,0 );
 	
-	dhFinal(a, g_a, g_b, keybuf, min(Z2SIZE(dh_get_params('p'))-1, keylen));
+	dhFinal(a, g_a, g_b, keybuf, min(dh_p_len-1, keylen));
 	
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -361,7 +362,7 @@ void clientSetup(){
 
 	recvMsg(enc_b_buf,enc_b_buf_len);
 
-	NEWBUF(g_a, Z2SIZE(dh_get_params('p')));
+	NEWBUF(g_a, dh_p_len);
 
 	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_a_buf,g_a_buf_len);
 
@@ -371,7 +372,7 @@ void clientSetup(){
 	dhGen(b, g_b);
 	send_status_message("Created yours part for Diffie-Hellman");
 
-	Z2NEWBUF(g_b, Z2SIZE(dh_get_params('p')));
+	Z2NEWBUF(g_b, dh_p_len);
 
 	NEWBUF(g_a_g_b, Z2SIZE(yoursRSA->n));
 
@@ -396,7 +397,7 @@ void clientSetup(){
 	
 	NEWZ(g_a);
 	BYTES2Z(g_a_buf, g_a_buf_len, g_a);
-	dhFinal(b, g_b, g_a, keybuf, min(Z2SIZE(dh_get_params('p'))-1, keylen));
+	dhFinal(b, g_b, g_a, keybuf, min(dh_p_len-1, keylen));
 
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -408,12 +409,28 @@ void clientSetup(){
 }
 
 
+void encodeInt(unsigned long long val, char* buf){
+	for(int i=0; i < NUMLEN; i++){
+		buf[i]=(val >> CHAR_BIT*i) & 0xFF;
+	}
+}
+
+unsigned long long decodeInt(char* buf){
+	unsigned long long val=0;
+
+	for(int i=0; i < NUMLEN; i++){
+		val |= (buf[i] << CHAR_BIT*i);
+	}
+
+	return val;
+}
+
 void recieveMessages(){
 	int ret;
 	while(1){
 		recvMsg(recv_buf, recv_buf_len);
 		send_status_message("Recieved packet...");
-		ret=aes_decrypt(keybuf, recv_buf, dec_buf, dec_buf_len);
+		ret=aes_decrypt(keybuf, (unsigned char*)recv_buf, (unsigned char*)dec_buf, dec_buf_len);
 
 		if (ret==-1){
 			pthread_exit(NULL);
@@ -633,7 +650,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (generate!=NULL){
-		rsa_generate_keys(generate,dh_get_params('p'));
+		rsa_generate_keys(generate,dh_p_len);
 		exit(0);
 	}else{
 		int ret;

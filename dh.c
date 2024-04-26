@@ -24,7 +24,7 @@ size_t pLen; /* length of p in bytes */
 /* NOTE: this constant is arbitrary and does not need to be secret. */
 const char* hmacsalt = "z3Dow}^Z]8Uu5>pr#;{QUs!133";
 
-int init(const char* fname)
+int dh_init(const char* fname)
 {
 	mpz_init(q);
 	mpz_init(p);
