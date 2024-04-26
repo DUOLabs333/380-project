@@ -16,16 +16,27 @@
 #include "rsa.h"
 #include "aes.h"
 
+
+#define _CONCAT(a,b) a##b
+#define CONCAT(a,b) _CONCAT(a,b)
+
+#define NEWBUF(name, len) \
+	int CONCAT(name,_buf_len)=len;\
+	char* CONCAT(name,_buf)=malloc(CONCAT(name,_buf_len));\
+	memset(CONCAT(name,_buf),0,CONCAT(name,_buf_len));\
+	pthread_cleanup_push(free, CONCAT(name,_buf));
+
+
 #ifndef PATH_MAX
 #define PATH_MAX 1024
 #endif
 
-static GtkTextBuffer *tbuf; /* transcript buffer */
-static GtkTextBuffer *mbuf; /* message buffer */
-static GtkTextView *tview;	/* view for transcript */
-static GtkTextMark *mark;	/* used for scrolling to end of transcript, etc */
+#include "z.h"
 
-mpz_t a, g_a, b, g_b;
+static GtkTextBuffer* tbuf; /* transcript buffer */
+static GtkTextBuffer* mbuf; /* message buffer */
+static GtkTextView*  tview; /* view for transcript */
+static GtkTextMark*   mark; /* used for scrolling to end of transcript, etc */
 
 static pthread_t network_thread; /* wait for incoming messagess and post to queue */
 
@@ -326,16 +337,7 @@ int isclient = 1;
 int issetup = 0;
 
 int keylen;
-unsigned char *keybuf;
-
-#define _CONCAT(a, b) a##b
-#define CONCAT(a, b) _CONCAT(a, b)
-
-#define NEWBUF(name, len)                                      \
-	int CONCAT(name, _buf_len) = len;                          \
-	char *CONCAT(name, _buf) = malloc(CONCAT(name, _buf_len)); \
-	memset(CONCAT(name, _buf), 0, CONCAT(name, _buf_len));     \
-	pthread_cleanup_push(free, CONCAT(name, _buf));
+unsigned char* keybuf;
 
 #define HASHLEN 32
 #define NUMLEN 8 // All integer values send/recived are this long
@@ -387,7 +389,7 @@ void serverSetup()
 
 	Z2NEWBYTES(g_a, Z2SIZE(dh_get_params('p'))); // Creates new buffer *_buf, along with *_buf_len with size equal to provided size (use NEWBUF).
 
-	NEWBUF(enc_b, Z2SIZE(yoursRSA->n)); // Every RSA encrypted message is as big as K->n
+	Z2NEWBYTES(g_a, Z2SIZE(dh_get_params('p'))); //Creates new buffer *_buf, along with *_buf_len with size equal to provided size (use NEWBUF).
 
 	rsa_encrypt(structs[YOURS].key, g_a_buf, g_a_buf_len, enc_b_buf, enc_b_buf_len); // Enc_{PkB}(g^a mod p)
 
@@ -399,7 +401,7 @@ void serverSetup()
 
 	NEWBUF(dec_a, enc_a_buf_len);
 
-	rsa_decrypt(structs[MINE].key, enc_a_buf, enc_a_buf_len, dec_a_buf, dec_a_buf_len); // Only copy dec_buflen bytes --- If there's not enough bytes to fill it up, memset to 0
+	rsa_decrypt(structs[MINE].key, enc_a_buf, enc_a_buf_len, dec_a_buf, dec_a_buf_len);
 
 	if (memcmp(dec_a_buf, g_a_buf, g_a_buf_len))
 	{
@@ -452,7 +454,7 @@ void clientSetup()
 	dhGen(b, g_b);
 	send_status_message("Created yours part for Diffie-Hellman");
 
-	Z2NEWBYTES(g_b); // Creates new buffer *_buf, along with *_buf_len
+	Z2NEWBUF(g_b, Z2SIZE(dh_get_params('p')); //Creates new buffer *_buf, along with *_buf_len
 
 	NEWBUF(g_a_g_b, Z2SIZE(yoursRSA->n));
 
