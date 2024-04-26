@@ -137,7 +137,7 @@ char* rsa_get_full_file_name(const char* fn, int priv){
 }
 
 
-void rsa_generate_keys(char* fn_prefix, size_t dh_p_len)
+void rsa_generate_keys(char* fn_prefix, size_t n_lower_bound)
 {
 	RSA_KEY K;
 	rsa_initKey(&K);
@@ -146,24 +146,31 @@ void rsa_generate_keys(char* fn_prefix, size_t dh_p_len)
 	 
 	 NEWZ(p_q); //|p-q|
 	 
-	 int keyBytes=2*dh_p_len+2; //Size of the key used (n). Has to be > 2*len(dh_p) and has to be even
-	 int pBytes=keyBytes/2; //Size of the prime numbers (p and q)
+	 size_t keyBytes=(n_lower_bound % 2 == 0) ? n_lower_bound : n_lower_bound+1; //Size of the key used (n). Has to be >= n_lower_bound and has to be even
 	 
-	 //Compare p and q
+	 size_t pBytes=keyBytes/2; //Size of the prime numbers (p and q)
+	 
 	 unsigned char* buf=malloc(pBytes);
-	 for (int i=0; i< 2; i++){
-    	 while(1){
-    	   randBytes(buf,pBytes);
-    	   BYTES2Z(buf, pBytes, *keys[i]);
-    	   
-    	   mpz_sub(p_q,K.p,K.q);
-           mpz_abs(p_q,p_q);
-	   mpz_mul(K.n, K.p, K.q); //n=p*q
-    	   if ((ISPRIME(*keys[i])>0) && (mpz_cmp_ui(p_q,100000)>0) && (Z2SIZE(K.n)==keyBytes)){ //Technically, we should check that ISPRIME(...)==2, but it will likely take a long time to get a probable pime. Additionally, the distance between p and q could be set higher.
-    	       break;
-    	   }
-        }
-    }
+	
+	 //Compare p and q
+	 while(1){
+		for (int i=0; i< 2; i++){
+			while(1){
+				randBytes(buf,pBytes);
+				BYTES2Z(buf, pBytes, *keys[i]);
+				if (ISPRIME(*keys[i])>0){
+					break;
+				}
+			}
+		}
+		mpz_sub(p_q,K.p,K.q);
+           	mpz_abs(p_q,p_q);
+	   	mpz_mul(K.n, K.p, K.q); //n=p*q
+
+		if ((mpz_cmp_ui(p_q,100000)>0) && (Z2SIZE(K.n)==keyBytes)){
+			break;
+		}
+	}
   
   
   NEWZ(p_1); //p-1
@@ -252,17 +259,22 @@ void rsa_decrypt(RSA_KEY* K, char* outBuf, size_t outLen, char* inBuf, size_t in
     free(buf);
 }
 
-int rsa_load_keys(char* keyPath, RSA_KEY* key, int priv){
+int rsa_load_keys(char* keyPath, RSA_KEY* key, size_t n_lower_bound, int priv){
 	FILE* file=fopen(keyPath, "r");
 	if (file == NULL){
 		return -1;
 	}
-
+	
 	if (priv){
 		rsa_readPrivate(file, key);
 	}else{
 		rsa_readPublic(file, key);
 	}
+
+	if (Z2SIZE(key->n)>=n_lower_bound){
+		return -1;
+	}
+	
 	fclose(file);
 	return 0;
 }

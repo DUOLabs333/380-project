@@ -14,6 +14,7 @@
 #include "keys.h"
 #include "aes.h"
 #include "sha.h"
+#include "prf.h"
 
 
 #define _CONCAT(a,b) a##b
@@ -277,8 +278,10 @@ char* hash_buf;
 
 RSA_KEY* mineRSA;
 RSA_KEY* yoursRSA;
+
+int SETUPLEN;
 void serverSetup(){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
-	NEWBUF(hello, 4);
+	NEWBUF(hello, 6);
 	
 	send_status_message("Waiting for initial HELLO");
 
@@ -299,36 +302,38 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	
 	send_status_message("Created mine part for Diffie-Hellman");
 
+	NEWBUF(g_a_nonce, SETUPLEN);
 	
+	Z2BYTES(g_a, NULL, g_a_nonce_buf);
 
-	Z2NEWBUF(g_a, dh_p_len);
-
+	randBytes((unsigned char*)(g_a_nonce_buf)+dh_p_len, NUMLEN);
 
 	NEWBUF(enc_b, Z2SIZE(yoursRSA->n)); //Every RSA encrypted message is as big as K->n
 
-	rsa_encrypt(yoursRSA, g_a_buf, g_a_buf_len, enc_b_buf); //Enc_{PkB}(g^a mod p)
+	rsa_encrypt(yoursRSA, g_a_nonce_buf, g_a_nonce_buf_len, enc_b_buf); //Enc_{PkB}(g^a mod p || nonce)
 
 	sendMsg(enc_b_buf, enc_b_buf_len, 0);
 
 	NEWBUF(enc_a, Z2SIZE(mineRSA->n));
 
-	recvMsg(enc_a_buf, enc_a_buf_len); //Receive Enc_{PkA}(g^a mod p || g^b mod p)
+	recvMsg(enc_a_buf, enc_a_buf_len); //Receive Enc_{PkA}(nonce || g^b mod p)
 	
 	
-	NEWBUF(dec_a, enc_a_buf_len);
+	NEWBUF(nonce_g_b, SETUPLEN);
 
-	rsa_decrypt(mineRSA, enc_a_buf, enc_a_buf_len, dec_a_buf, dec_a_buf_len);
+	rsa_decrypt(mineRSA, enc_a_buf, enc_a_buf_len, nonce_g_b_buf, nonce_g_b_buf_len);
 
 
-	if(memcmp(dec_a_buf,g_a_buf, g_a_buf_len)){
-		send_status_message("Mine g^a and yours g^a do not match. Disconnecting...");
+	if(memcmp(nonce_g_b_buf,g_a_nonce_buf+dh_p_len, NUMLEN)){
+		send_status_message("Mine nonce and yours nonce do not match. Disconnecting...");
 		pthread_exit(NULL);
 	}
 
 	NEWZ(g_b);
 	
-	int g_b_buf_len=g_a_buf_len;
-	char* g_b_buf=dec_a_buf+g_a_buf_len;
+	char* g_b_buf=nonce_g_b_buf+NUMLEN;
+	char g_b_buf_len=dh_p_len;
+
 	BYTES2Z(g_b_buf, g_b_buf_len, g_b);
 	
 	rsa_encrypt(mineRSA, g_b_buf, g_b_buf_len, enc_b_buf); //Enc_{PkB}(g^b mod p)
@@ -346,8 +351,9 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 }
 
 void clientSetup(){
-	NEWBUF(hello, 4);
-	memcpy(hello_buf, "HELLO", 4);
+	NEWBUF(hello, 6);
+
+	sprintf(hello_buf, "HELLO");
 
 	send_status_message("Sending initial HELLO");
 
@@ -360,44 +366,43 @@ void clientSetup(){
 
 	recvMsg(enc_b_buf,enc_b_buf_len);
 
-	NEWBUF(g_a, dh_p_len);
+	NEWBUF(g_a_nonce, SETUPLEN);
 
-	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_a_buf,g_a_buf_len);
+	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_a_nonce_buf,g_a_nonce_buf_len);
 
 
 	NEWZ(b);
 	NEWZ(g_b);
 	dhGen(b, g_b);
 	send_status_message("Created yours part for Diffie-Hellman");
-
-	Z2NEWBUF(g_b, dh_p_len);
-
-	NEWBUF(g_a_g_b, Z2SIZE(yoursRSA->n));
-
-	memcpy(g_a_g_b_buf, g_a_buf, g_a_buf_len);
-	memcpy(g_a_g_b_buf+g_a_buf_len, g_b_buf, g_b_buf_len);
+	
+	NEWBUF(nonce_g_b, SETUPLEN);
+	memcpy(nonce_g_b_buf, g_a_nonce_buf+dh_p_len, NUMLEN);
+	Z2BYTES(g_b,NULL,nonce_g_b_buf+NUMLEN); 
 	
 	NEWBUF(enc_a, Z2SIZE(yoursRSA->n));
 
-	rsa_encrypt(yoursRSA, g_a_g_b_buf, g_a_g_b_buf_len, enc_a_buf);
+	rsa_encrypt(yoursRSA, nonce_g_b_buf, nonce_g_b_buf_len, enc_a_buf);
 	sendMsg(enc_a_buf,enc_a_buf_len, 0);
 
 	recvMsg(enc_b_buf, enc_b_buf_len);
 	
-	NEWBUF(g_b_a, g_a_buf_len);
-
+	NEWBUF(g_b_a, dh_p_len);
+	
 	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
+	
+	NEWZ(g_b_a);
+	BYTES2Z(g_b_a_buf, g_b_a_buf_len, g_b_a);
 
-	if(memcmp(g_b_a_buf, g_b_buf, g_b_buf_len)){
+	if(mpz_cmp(g_b,g_b_a)){
 		send_status_message("Mine g^b and yours g^b do not match. Disconnecting...");
 		pthread_exit(NULL);
 	}
 	
 	NEWZ(g_a);
-	BYTES2Z(g_a_buf, g_a_buf_len, g_a);
-	dhFinal(b, g_b, g_a, keybuf, min(dh_p_len-1, keylen));
+	BYTES2Z(g_a_nonce_buf, dh_p_len, g_a);
+	dhFinal(b, g_b, g_a, keybuf, min(dh_p_len, keylen));
 
-	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -585,7 +590,8 @@ int main(int argc, char *argv[])
 	recv_buf=malloc(recv_buf_len);
 	dec_buf=malloc(dec_buf_len);
 	hash_buf=malloc(hash_buf_len);
-
+	
+	SETUPLEN=dh_p_len+NUMLEN;
 	//End of initialization
 
 	// define long options
@@ -647,9 +653,10 @@ int main(int argc, char *argv[])
 				return 1;
 		}
 	}
+	size_t n_lower_bound=SETUPLEN+1;
 
 	if (generate!=NULL){
-		rsa_generate_keys(generate,dh_p_len);
+		rsa_generate_keys(generate,n_lower_bound);
 		exit(0);
 	}else{
 		int ret;
@@ -657,12 +664,12 @@ int main(int argc, char *argv[])
 		mineRSA=&(structs[MINE].key);
 		yoursRSA=&(structs[YOURS].key);
 
-		ret=rsa_load_keys(structs[MINE].keyPath,mineRSA,1);
+		ret=rsa_load_keys(structs[MINE].keyPath,mineRSA,n_lower_bound, 1);
 		if (ret==-1){
 			error("ERROR loading mine RSA key");
 		}
 
-		ret=rsa_load_keys(structs[YOURS].keyPath,yoursRSA,0);
+		ret=rsa_load_keys(structs[YOURS].keyPath,yoursRSA,n_lower_bound, 0);
 
 		if (ret==-1){
 			error("ERROR loading your RSA key");

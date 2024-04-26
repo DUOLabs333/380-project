@@ -41,15 +41,17 @@ With all of that out of the way, let's finally move on to describe the actual pr
 			This is useful when dealing with disconnects.
 
 
-	2. Alice generates a random integer `a` and sends to Bob Enc_{PkB}(g^a mod p)
+	2. Alice generates a random integer `a` and sends to Bob Enc_{PkB}(g^a mod p||nonce)
+		Nonce is 8 bytes in length and is randomly generated.
+
 		Since Alice and Bob are not generating new DH parameters every conversation, but instead will always use the parameters given in the `params` file, we are also implicitly assuming that there there is no backdoor in the parameters provided that would make it easier for Mal to figure out the secret key that will eventually be used.
 
-		Since we are encrypting a value that is of most p, the length of n used in both Alice's and Bob's private key must be >= 2*len(p). The other benefit of using RSA encryption is that the encryption length is fixed, which minimizes buffer overflows/underflows.
+		Since we are encrypting a value that is of most p, the length of n used in both Alice's and Bob's private key must be > len(p)+8. The other benefit of using RSA encryption is that the encryption length is fixed, which minimizes buffer overflows/underflows.
 
 		Similarly, g^x mod p also has a fixed length.
 	
-	3. Bob receives the message, decrypts it to obtain g^a mod p, generates his own random integer b, and sends to Alice Enc_{PkA}(g^a mod p || g^b mod p)
-		This serves as a method of authentication --- the only way to get g^a mod p is by having SkB.
+	3. Bob receives the message, decrypts it to obtain g^a mod p, generates his own random integer b, and sends to Alice Enc_{PkA}(nonce || g^b mod p)
+		This serves as a method of authentication --- the only way to get nonce is by having SkB.
 	
 	4. Alice receives the messages, decrypts them to obtain g^a mod p and g^b mod p, checks whether the g^a mod p matches, computes sk=((g^b) mod p)^a, and sends Enc_{PkB}(g^b mod p).
 
