@@ -271,7 +271,8 @@ int rsa_load_keys(char* keyPath, RSA_KEY* key, size_t n_lower_bound, int priv){
 		rsa_readPublic(file, key);
 	}
 
-	if (Z2SIZE(key->n)>=n_lower_bound){
+	if (Z2SIZE(key->n)<n_lower_bound){
+		fprintf(stderr, "n in RSA key is not big enough");
 		return -1;
 	}
 	

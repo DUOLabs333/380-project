@@ -99,35 +99,40 @@ static void tsappend(char* message, char** tagnames, int ensurenewline)
 	gtk_text_buffer_delete_mark(tbuf,mark);
 }
 
-void send_status_message(char* msg){
-	while(!g_main_context_acquire(NULL)){
-		continue;
-	}
+gboolean _send_status_message(gpointer msg){
+
 
 	char* tags[2]={"status", NULL};
-	tsappend(msg, tags, 1);
+	tsappend((char*)msg, tags, 1);
+	return FALSE;
 
-	g_main_context_release(NULL);
 }
 
-void show_new_message(char* msg, int length)
+void send_status_message(char* msg){
+	g_main_context_invoke(NULL, _send_status_message, (gpointer)msg);
+}
+
+gboolean _show_new_message(gpointer msg)
 {
-	while(!g_main_context_acquire(NULL)){
-		continue;
-	}
 	char* tags[2] = {"friend",NULL};
 	char* friendname = "mr. friend: ";
 	tsappend(friendname,tags,0);
 
-	char* message=malloc(length+1);
-	memcpy(message, msg, length);
-	message[length]='\0';
+	tsappend((char*)msg,NULL,1);
 
-	tsappend(message,NULL,1);
-	free(message);
-
-	g_main_context_release(NULL);
+	return FALSE;
 }
+
+void show_new_message(char* message, int length){
+	char* msg=malloc(length+1);
+	memcpy(msg, message, length);
+	msg[length]='\0';
+
+	g_main_context_invoke(NULL, _show_new_message, (gpointer)msg);
+
+	free(msg);
+}
+
 //End of GTK Text functions 
 
 // Start of network-related functions
@@ -559,13 +564,13 @@ static void buf_limit(GtkTextBuffer *buffer, GtkTextIter *location, gchar *text,
   { //Should limit length of characters you can type in.
     static int i=1;
     gint count=gtk_text_buffer_get_char_count(buffer);
-    g_print("%i Chars %i\n", i++, count);
+    //g_print("%i Chars %i\n", i++, count);
     if(count>MESSAGELEN)
       {
         GtkTextIter offset, end;
         gtk_text_buffer_get_iter_at_offset(buffer, &offset, 10);
         gtk_text_buffer_get_end_iter(buffer, &end);
-        g_print("Remove Range %i %i\n", gtk_text_iter_get_offset(&offset), gtk_text_iter_get_offset(&end));
+        //g_print("Remove Range %i %i\n", gtk_text_iter_get_offset(&offset), gtk_text_iter_get_offset(&end));
         gtk_text_buffer_delete(buffer, &offset, &end);
         gtk_text_iter_assign(location, &offset);
       }
