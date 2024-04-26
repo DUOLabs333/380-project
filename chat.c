@@ -14,6 +14,7 @@
 #include "dh.h"
 #include "keys.h"
 #include "aes.h"
+#include "sha.h"
 
 
 #define _CONCAT(a,b) a##b
