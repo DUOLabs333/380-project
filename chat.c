@@ -30,6 +30,7 @@
 #endif
 
 #include "z.h"
+#include "rsa.h"
 
 static GtkTextBuffer* tbuf; /* transcript buffer */
 static GtkTextBuffer* mbuf; /* message buffer */
@@ -45,7 +46,7 @@ struct NetworkStruct{
 
 struct ProtocolStruct{
 	char* keyPath;
-	RSA_KEY* key;
+	RSA_KEY key;
 	unsigned long long counter;
 };
 
@@ -55,10 +56,7 @@ int YOURS=1;
 struct ProtocolStruct structs[2]={0};
 struct NetworkStruct network_params={.port=1337};
 
-#define min(a, b)         \
-	({ typeof(a) _a = a;    \
-	 typeof(b) _b = b;    \
-	 _a > _b ? _b : _a; })
+
 
 static void error(const char *msg)
 {
@@ -247,6 +245,8 @@ int shutdownNetwork()
 }
 
 //End of network functions 
+
+//Protocol functions
 int isclient = 1;
 int issetup=0;
 
@@ -274,7 +274,8 @@ char* dec_buf; //The decrypted bytes recieved
 const int hash_buf_len=HASHLEN;
 char* hash_buf;
 
-//Protocol functions
+RSA_KEY* mineRSA;
+RSA_KEY* yoursRSA;
 void serverSetup(){ //This is the setup protocol that will be performed by the server. The secret key will be memcpy into the key buffer.
 	NEWBUF(hello, 4);
 	
@@ -297,8 +298,6 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	
 	send_status_message("Created mine part for Diffie-Hellman");
 
-	RSA_KEY* mineRSA=structs[MINE].key;
-	RSA_KEY* yoursRSA=structs[YOURS].key;
 	
 
 	Z2NEWBUF(g_a, Z2SIZE(dh_get_params('p')));
@@ -306,7 +305,7 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 
 	NEWBUF(enc_b, Z2SIZE(yoursRSA->n)); //Every RSA encrypted message is as big as K->n
 
-	rsa_encrypt(structs[YOURS].key, g_a_buf, g_a_buf_len, enc_b_buf, enc_b_buf_len); //Enc_{PkB}(g^a mod p)
+	rsa_encrypt(yoursRSA, g_a_buf, g_a_buf_len, enc_b_buf); //Enc_{PkB}(g^a mod p)
 
 	sendMsg(enc_b_buf, enc_b_buf_len, 0);
 
@@ -317,7 +316,7 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	
 	NEWBUF(dec_a, enc_a_buf_len);
 
-	rsa_decrypt(structs[MINE].key, enc_a_buf, enc_a_buf_len, dec_a_buf, dec_a_buf_len);
+	rsa_decrypt(mineRSA, enc_a_buf, enc_a_buf_len, dec_a_buf, dec_a_buf_len);
 
 
 	if(memcmp(dec_a_buf,g_a_buf, g_a_buf_len)){
@@ -331,12 +330,13 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	char* g_b_buf=dec_a_buf+g_a_buf_len;
 	BYTES2Z(g_b_buf, g_b_buf_len, g_b);
 	
-	rsa_encrypt(structs[YOURS].key, g_b_buf, g_b_buf_len, enc_b_buf, enc_b_buf_len); //Enc_{PkB}(g^b mod p)
+	rsa_encrypt(mineRSA, g_b_buf, g_b_buf_len, enc_b_buf); //Enc_{PkB}(g^b mod p)
 
 	sendMsg(enc_b_buf, enc_b_buf_len,0 );
 
 	dhFinal(a, g_a, g_b, keybuf, keylen);
 	
+	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -354,8 +354,6 @@ void clientSetup(){
 
 	send_status_message("Recieved a HELLO");
 	
-	RSA_KEY* mineRSA=structs[MINE].key;
-	RSA_KEY* yoursRSA=structs[YOURS].key;
 	
 	NEWBUF(enc_b, Z2SIZE(mineRSA->n));
 
@@ -363,7 +361,7 @@ void clientSetup(){
 
 	NEWBUF(g_a, Z2SIZE(dh_get_params('p')));
 
-	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_a_buf,g_a_buf_len);
+	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_a_buf,g_a_buf_len);
 
 
 	NEWZ(b);
@@ -371,7 +369,7 @@ void clientSetup(){
 	dhGen(b, g_b);
 	send_status_message("Created yours part for Diffie-Hellman");
 
-	Z2NEWBUF(g_b, Z2SIZE(dh_get_params('p')); //Creates new buffer *_buf, along with *_buf_len
+	Z2NEWBUF(g_b, Z2SIZE(dh_get_params('p'))); //Creates new buffer *_buf, along with *_buf_len
 
 	NEWBUF(g_a_g_b, Z2SIZE(yoursRSA->n));
 
@@ -380,14 +378,14 @@ void clientSetup(){
 	
 	NEWBUF(enc_a, Z2SIZE(yoursRSA->n));
 
-	rsa_encrypt(structs[YOURS].key, g_a_g_b_buf, g_a_g_b_buf_len, enc_a_buf, enc_a_buf_len);
+	rsa_encrypt(yoursRSA, g_a_g_b_buf, g_a_g_b_buf_len, enc_a_buf);
 	sendMsg(enc_a_buf,enc_a_buf_len, 0);
 
 	recvMsg(enc_b_buf, enc_b_buf_len);
 	
 	NEWBUF(g_b_a, g_a_buf_len);
 
-	rsa_decrypt(structs[MINE].key, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
+	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
 
 	if(memcmp(g_b_a_buf, g_b_buf, g_b_buf_len)){
 		send_status_message("Mine g^b and yours g^b do not match. Disconnecting...");
@@ -398,6 +396,7 @@ void clientSetup(){
 	BYTES2Z(g_a_buf, g_a_buf_len, g_a);
 	dhFinal(b, g_b, g_a, keybuf, keylen);
 
+	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -633,9 +632,21 @@ int main(int argc, char *argv[])
 		rsa_generate_keys(generate,dh_get_params('p')); //Generates, then saves to keyPath. Makes sure that len(n)>2*len(dh_p)
 		exit(0);
 	}else{
-		rsa_load_keys(structs[MINE],1); //1 indicates load both private (0 means public). Should error at any error.
-		
-		rsa_load_keys(structs[YOURS],0);
+		int ret;
+
+		mineRSA=&(structs[MINE].key);
+		yoursRSA=&(structs[YOURS].key);
+
+		ret=rsa_load_keys(structs[MINE].keyPath,mineRSA,1); //1 indicates load private (0 means public).
+		if (ret==-1){
+			error("ERROR loading mine RSA key");
+		}
+
+		ret=rsa_load_keys(structs[YOURS].keyPath,yoursRSA,0);
+
+		if (ret==-1){
+			error("ERROR loading your RSA key");
+		}
 	}
 
 	/* setup GTK... */
@@ -683,12 +694,12 @@ int main(int argc, char *argv[])
 	int ret;
 	if (isclient) {
 		if (!strcmp(network_params.hostname, "")){
-			sprintf(network_params.hostname, "localhost");
+			network_params.hostname="localhost";
 		}
 		ret=pthread_create(&network_thread,0,initClientNet, 0);
 	} else {
 		if (!strcmp(network_params.hostname, "")){
-			sprintf(network_params.hostname, "127.0.0.1");
+			network_params.hostname="127.0.0.1";
 		}
 		ret=pthread_create(&network_thread,0,initServerNet, 0);
 	}

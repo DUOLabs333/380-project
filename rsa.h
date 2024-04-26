@@ -1,11 +1,6 @@
-#pragma once
-#include <gmp.h>
-#include <math.h>
+//Originally, I was going to use OpenSSL to do RSA; however, trying to understand the manpages enough to only use non-deprecated functions was so complicated, I decided to just copy my code from Project 1
 
-#define KEYBYTES ceil((mpz_sizeinbase(K->n, 2)*1.0)/CHAR_BIT)
-#define NEWZ(x) mpz_t x; mpz_init(x)
-#define BYTES2Z(x,buf,len) mpz_import(x,len,-1,1,0,0,buf)
-#define ISPRIME(x) mpz_probab_prime_p(x,10)
+#include "z.h"
 
 typedef struct _RSA_KEY {
 	mpz_t p;
@@ -15,3 +10,10 @@ typedef struct _RSA_KEY {
 	mpz_t d;
 } RSA_KEY;
 
+void rsa_generate_keys(char* fn_prefix, mpz_t dh_p);
+/* NOTE: inBuf, when interpreted as a integer, must be less than K->n */
+void rsa_encrypt(RSA_KEY* K,  char* inBuf, size_t len,  char* outBuf);
+
+void rsa_decrypt(RSA_KEY* K, char* outBuf, size_t outLen,  char* inBuf, size_t inLen);
+
+int rsa_load_keys(char* keyPath, RSA_KEY* key, int priv);
