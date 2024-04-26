@@ -232,8 +232,6 @@ void rsa_encrypt(RSA_KEY* K, char* inBuf, size_t len, char* outBuf)
 	 
 	 
 	 mpz_powm(ciphertext, m, K->e, K->n); //c=m^e mod n
-	 
-	 size_t size=0;
 
 	 Z2BYTES(ciphertext, NULL, outBuf);
 }

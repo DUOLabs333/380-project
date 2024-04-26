@@ -92,7 +92,7 @@ int main()
 {
 	/* NOTE: if for some reason you wanted to make new DH parameters,
 	 * you would call initFromScratch(...) here instead */
-	if (init("params") == 0) {
+	if (dh_init("params") == 0) {
 		// gmp_printf("Successfully read DH params:\nq = %Zd\np = %Zd\ng = %Zd\n",q,p,g);
 		printf("Successfully read DH params.\n");
 	}

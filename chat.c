@@ -531,10 +531,10 @@ static const char* usage =
 "Secure chat (CCNY computer security project).\n\n"
 "   -c, --client  Start as a client.\n"
 "   -s, --server        Start as a server.\n"
-"   -h, --hostname HOSTNAME Hostname to listen/connect on (defaults to 127.0.0.1/localhost).\n"
+"   -n, --hostname HOSTNAME Hostname to listen/connect on (defaults to 127.0.0.1/localhost).\n"
 "   -p, --port    PORT  Listen or connect on PORT (defaults to 1337).\n"
 "   -m, --mine-key    PATH Path of YOUR private key.\n"
-"   -y, --yours-key PATH Path of OTHER PERSON'S public.\n"
+"   -y, --yours-key PATH Path of OTHER PERSON'S public key.\n"
 "   -g, --generate PATH Generate keys at PATH{,.pub}, then exit.\n"
 "   -h, --help          show this message and exit.\n";
 
