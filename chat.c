@@ -1,6 +1,4 @@
 #include <arpa/inet.h>
-#include <bits/getopt_core.h>
-#include <bits/getopt_ext.h>
 #include <gtk/gtk.h>
 #include <glib/gunicode.h> /* for utf8 strlen */
 #include <limits.h>
@@ -172,7 +170,7 @@ void* initServerNet(void*)
 	if (bind(listensock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
 		error("ERROR on binding");
 
-	char status_string[80]; //Should be long enough --- TCP ports only go up to 65535, and IP addresses have <=15 characters.
+	char status_string[100]; //Should be long enough --- TCP ports only go up to 65535, and IP addresses have <=15 characters.
 	sprintf(status_string, "Listening on %s:%i...", network_params.hostname, network_params.port);
 	send_status_message(status_string);
 
@@ -214,7 +212,7 @@ void* initClientNet(void*)
 	memcpy(&serv_addr.sin_addr.s_addr,server->h_addr,server->h_length);
 	serv_addr.sin_port = htons(network_params.port);
 	
-	char status_string[80];
+	char status_string[100];
 	sprintf(status_string, "Connecting to %s:%i...", network_params.hostname, network_params.port);
 	send_status_message(status_string);
 
@@ -376,7 +374,7 @@ void clientSetup(){
 
 	NEWBUF(g_a_g_b, Z2SIZE(yoursRSA->n));
 
-	memcpy(g_a_b_buf, g_a_buf, g_a_buf_len);
+	memcpy(g_a_g_b_buf, g_a_buf, g_a_buf_len);
 	memcpy(g_a_g_b_buf+g_a_buf_len, g_b_buf, g_b_buf_len);
 	
 	NEWBUF(enc_a, Z2SIZE(yoursRSA->n));
@@ -596,9 +594,9 @@ int main(int argc, char *argv[])
 		{"server",   no_argument,       0, 's'},
 		{"hostname", required_argument, 0, 'n'}, //'h' was already taken
 		{"port",     required_argument, 0, 'p'},
-		{"mine-keys", required_argument, 0, 'm'},
-		{"yours-keys", required_argument, 0, 'y'},
-		{"generate", no_argument, 0, 'g'},
+		{"mine-key", required_argument, 0, 'm'},
+		{"yours-key", required_argument, 0, 'y'},
+		{"generate", required_argument, 0, 'g'},
 		{"help",     no_argument,       0, 'h'},
 		{0,0,0,0}
 	};
@@ -623,6 +621,7 @@ int main(int argc, char *argv[])
 				
 				memcpy(network_params.hostname,optarg, len+1);
 				break;
+				 
 			case 'c':
 				break; //Nothing to do here
 			case 's':
@@ -677,7 +676,13 @@ int main(int argc, char *argv[])
 	GObject* transcript;
 	GObject* message;
 	GError* gerror = NULL;
-	gtk_init(&argc, &argv);
+	gboolean is_initialized;
+	
+	is_initialized=gtk_init_check(&argc, &argv);
+	if(!is_initialized){
+		error("ERROR GUI could not be started");
+	}
+
 	builder = gtk_builder_new();
 	if (gtk_builder_add_from_file(builder,"layout.ui",&gerror) == 0) {
 		g_printerr("Error reading %s\n", gerror->message);
@@ -708,19 +713,16 @@ int main(int argc, char *argv[])
 	gtk_text_buffer_create_tag(tbuf,"friend","foreground","#6c71c4","font","bold",NULL);
 	gtk_text_buffer_create_tag(tbuf,"self","foreground","#268bd2","font","bold",NULL);
 	
-	while(!gtk_is_initialized()){ //Wait for GTK to initialize. It's not best practice to busy-loop instead of using some sort of signaling, but I don't care enough to figure that out
-	}
-	
 	//Start network thread
 	int ret;
 	if (isclient) {
 		if (!strcmp(network_params.hostname, "")){
-			network_params.hostname="localhost";
+			sprintf(network_params.hostname,"localhost");
 		}
 		ret=pthread_create(&network_thread,0,initClientNet, 0);
 	} else {
 		if (!strcmp(network_params.hostname, "")){
-			network_params.hostname="127.0.0.1";
+			sprintf(network_params.hostname,"127.0.0.1");
 		}
 		ret=pthread_create(&network_thread,0,initServerNet, 0);
 	}
