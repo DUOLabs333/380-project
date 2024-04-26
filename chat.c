@@ -108,7 +108,11 @@ gboolean _send_status_message(gpointer msg){
 
 }
 
-void send_status_message(char* msg){
+void send_status_message(char* message){
+	int length=strlen(message)+1;
+	char* msg=malloc(length);
+	memcpy(msg, message, length);
+
 	g_main_context_invoke(NULL, _send_status_message, (gpointer)msg);
 }
 
