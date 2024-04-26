@@ -13,6 +13,7 @@
 #include <getopt.h>
 #include "dh.h"
 #include "keys.h"
+#include "aes.h"
 
 
 #define _CONCAT(a,b) a##b
@@ -262,13 +263,13 @@ const int PACKETLEN=NUMLEN+MESSAGELEN+HASHLEN+NUMLEN;
 const int packet_buf_len=PACKETLEN; 
 char* packet_buf; //The unencrypted bytes that will be sent
 
-const int send_buf_len=packet_buf_len;
+const int send_buf_len=packet_buf_len+AES_IV_LEN;
 char* send_buf; //The encrypted bytes that will be sent
 
 const int recv_buf_len=send_buf_len;
 char* recv_buf; //The encrypted bytes recieved
 
-const int dec_buf_len=recv_buf_len;
+const int dec_buf_len=packet_buf_len;
 char* dec_buf; //The decrypted bytes recieved
 
 const int hash_buf_len=HASHLEN;
@@ -333,8 +334,8 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	rsa_encrypt(mineRSA, g_b_buf, g_b_buf_len, enc_b_buf); //Enc_{PkB}(g^b mod p)
 
 	sendMsg(enc_b_buf, enc_b_buf_len,0 );
-
-	dhFinal(a, g_a, g_b, keybuf, keylen);
+	
+	dhFinal(a, g_a, g_b, keybuf, min(Z2SIZE(dh_get_params('p'))-1, keylen));
 	
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -369,7 +370,7 @@ void clientSetup(){
 	dhGen(b, g_b);
 	send_status_message("Created yours part for Diffie-Hellman");
 
-	Z2NEWBUF(g_b, Z2SIZE(dh_get_params('p'))); //Creates new buffer *_buf, along with *_buf_len
+	Z2NEWBUF(g_b, Z2SIZE(dh_get_params('p')));
 
 	NEWBUF(g_a_g_b, Z2SIZE(yoursRSA->n));
 
@@ -394,7 +395,7 @@ void clientSetup(){
 	
 	NEWZ(g_a);
 	BYTES2Z(g_a_buf, g_a_buf_len, g_a);
-	dhFinal(b, g_b, g_a, keybuf, keylen);
+	dhFinal(b, g_b, g_a, keybuf, min(Z2SIZE(dh_get_params('p'))-1, keylen));
 
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -407,16 +408,22 @@ void clientSetup(){
 
 
 void recieveMessages(){
+	int ret;
 	while(1){
 		recvMsg(recv_buf, recv_buf_len);
 		send_status_message("Recieved packet...");
-		aes_decrypt(keybuf, keylen, recv_buf, recv_buf_len, dec_buf, dec_buf_len);
+		ret=aes_decrypt(keybuf, recv_buf, dec_buf, dec_buf_len);
+
+		if (ret==-1){
+			pthread_exit(NULL);
+		}
+
 		sha256_hash(dec_buf, dec_buf_len, hash_buf);
 		if(memcmp(dec_buf+NUMLEN+MESSAGELEN, hash_buf, hash_buf_len)){
 			send_status_message("Hashes do not match...");
 			continue;
 		}
-//send_message has overloads, one without length, and one with. send_message copies into its own buffer
+
 		if(decodeInt(dec_buf+(dec_buf_len-NUMLEN))!=structs[YOURS].counter){
 			send_status_message("Counter values do not match");
 			continue;
@@ -479,9 +486,9 @@ static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* dat
 		sha256_hash(packet_buf, NUMLEN+MESSAGELEN, packet_buf+(packet_buf_len-(NUMLEN+HASHLEN))); //Hash the plaintext to ensure (plaintext) integrity
 		encodeInt(structs[MINE].counter, packet_buf+(packet_buf_len-(NUMLEN))); //Encode the message counter
 
-		aes_encrypt(packet_buf, packet_buf_len, send_buf); //Encrypt message
+		aes_encrypt((unsigned char*)keybuf, (unsigned char*)packet_buf, packet_buf_len, (unsigned char *)send_buf); //Encrypt message
 
-		int ret=sendMsg(send_buf, send_buf_len,1); //Send message. The 1 at the end tells it to return a -1 upon error, instead of a pthread_exit
+		int ret=sendMsg(send_buf, send_buf_len,1); //Send message
 
 		if (ret==-1){
 			pthread_cancel(protocol_thread); //Cancel the protocol thread.
@@ -496,11 +503,6 @@ static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* dat
 			send_status_message("Message sent successfully!");
 		}
 
-		/* XXX we should probably do the actual network stuff in a different
-		 * thread and have it call this once the message is actually sent. */
-		ssize_t nbytes;
-		if ((nbytes = send(sockfd,message,len,0)) == -1)
-			error("send failed");
 	}
 	pthread_mutex_unlock(&send_message_mutex);
 }
@@ -556,8 +558,9 @@ int main(int argc, char *argv[])
 	}
 	
 	//Initialization of global objects
-	keylen=Z2SIZE(dh_get_params('p'))-1;
+	keylen=AES_KEY_LEN;
 	keybuf=malloc(keylen);
+	memset(keybuf, 0, keylen);
 	
 	pthread_mutex_init(&send_message_mutex, NULL);
 
@@ -629,7 +632,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (generate!=NULL){
-		rsa_generate_keys(generate,dh_get_params('p')); //Generates, then saves to keyPath. Makes sure that len(n)>2*len(dh_p)
+		rsa_generate_keys(generate,dh_get_params('p'));
 		exit(0);
 	}else{
 		int ret;
@@ -637,7 +640,7 @@ int main(int argc, char *argv[])
 		mineRSA=&(structs[MINE].key);
 		yoursRSA=&(structs[YOURS].key);
 
-		ret=rsa_load_keys(structs[MINE].keyPath,mineRSA,1); //1 indicates load private (0 means public).
+		ret=rsa_load_keys(structs[MINE].keyPath,mineRSA,1);
 		if (ret==-1){
 			error("ERROR loading mine RSA key");
 		}
