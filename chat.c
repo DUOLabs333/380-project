@@ -109,9 +109,18 @@ gboolean _send_status_message(gpointer msg){
 }
 
 void send_status_message(char* message){
-	int length=strlen(message)+1;
-	char* msg=malloc(length);
-	memcpy(msg, message, length);
+	int length=strlen(message);
+	int size=0;
+
+	char* msg=malloc(8+length+3);
+
+	sprintf(msg, "Status: ");
+	size+=8;
+
+	memcpy(msg+size, message, length);
+	size+=length;
+
+	sprintf(msg+size,"\n\n%c",'\0');
 
 	g_main_context_invoke(NULL, _send_status_message, (gpointer)msg);
 }
@@ -206,13 +215,12 @@ void* initServerNet(void*)
 	return 0;
 }
 
+int shutdownNetwork();
 void* initClientNet(void*)
 {
 	struct sockaddr_in serv_addr;
-	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	struct hostent *server;
-	if (sockfd < 0)
-		error("ERROR opening socket");
+
 	server = gethostbyname(network_params.hostname);
 	if (server == NULL) {
 		error("ERROR, no such host");
@@ -227,8 +235,12 @@ void* initClientNet(void*)
 	send_status_message(status_string);
 
 	while (1){
+		sockfd = socket(AF_INET, SOCK_STREAM, 0);
+		if (sockfd < 0)
+			error("ERROR opening socket");
 		if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0){
 			sprintf(status_string, "Failed to connect: %s", strerror(errno));
+			printf("%s",status_string);
 			send_status_message(status_string);
 			continue;
 		}
@@ -237,6 +249,8 @@ void* initClientNet(void*)
 		pthread_join(protocol_thread, NULL);
 
 		send_status_message("Server has disconnected, trying to connect again...");
+
+		shutdownNetwork();
 	}
 	
 	/* at this point, should be able to send/recv on sockfd */
@@ -297,8 +311,8 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 
 	while(1){
 		recvMsg(hello_buf, hello_buf_len);
-		if(strncmp(hello_buf,"HELLO", hello_buf_len)){ //You must get a "HELLO" to continue
-			continue;
+		if(!strncmp(hello_buf,"HELLO", hello_buf_len)){ //You must get a "HELLO" to continue
+			break;
 		}
 
 	}
@@ -318,7 +332,8 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	randBytes((unsigned char*)(g_a_nonce_buf)+dh_p_len, NUMLEN);
 
 	NEWBUF(enc_b, Z2SIZE(yoursRSA->n)); //Every RSA encrypted message is as big as K->n
-
+	
+	printf("%d\n", enc_b_buf_len);
 	rsa_encrypt(yoursRSA, g_a_nonce_buf, g_a_nonce_buf_len, enc_b_buf); //Enc_{PkB}(g^a mod p || nonce)
 
 	sendMsg(enc_b_buf, enc_b_buf_len, 0);
@@ -349,7 +364,7 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 
 	sendMsg(enc_b_buf, enc_b_buf_len,0 );
 	
-	dhFinal(a, g_a, g_b, keybuf, min(dh_p_len-1, keylen));
+	dhFinal(a, g_a, g_b, keybuf, min(dh_p_len, keylen));
 	
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -368,7 +383,7 @@ void clientSetup(){
 
 	sendMsg(hello_buf, hello_buf_len,0 );
 
-	send_status_message("Recieved a HELLO");
+	send_status_message("Sent a HELLO");
 	
 	
 	NEWBUF(enc_b, Z2SIZE(mineRSA->n));
@@ -383,6 +398,7 @@ void clientSetup(){
 	NEWZ(b);
 	NEWZ(g_b);
 	dhGen(b, g_b);
+	
 	send_status_message("Created yours part for Diffie-Hellman");
 	
 	NEWBUF(nonce_g_b, SETUPLEN);
@@ -395,7 +411,7 @@ void clientSetup(){
 	sendMsg(enc_a_buf,enc_a_buf_len, 0);
 
 	recvMsg(enc_b_buf, enc_b_buf_len);
-	
+
 	NEWBUF(g_b_a, dh_p_len);
 	
 	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
@@ -404,6 +420,7 @@ void clientSetup(){
 	BYTES2Z(g_b_a_buf, g_b_a_buf_len, g_b_a);
 
 	if(mpz_cmp(g_b,g_b_a)){
+		printf("Mine g^b and yours g^b do not match. Disconnecting...\n");
 		send_status_message("Mine g^b and yours g^b do not match. Disconnecting...");
 		pthread_exit(NULL);
 	}
@@ -411,6 +428,7 @@ void clientSetup(){
 	NEWZ(g_a);
 	BYTES2Z(g_a_nonce_buf, dh_p_len, g_a);
 	dhFinal(b, g_b, g_a, keybuf, min(dh_p_len, keylen));
+	
 
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -663,7 +681,7 @@ int main(int argc, char *argv[])
 		}
 	}
 	size_t n_lower_bound=SETUPLEN+1;
-
+	pri
 	if (generate!=NULL){
 		rsa_generate_keys(generate,n_lower_bound);
 		exit(0);

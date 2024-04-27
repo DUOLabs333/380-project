@@ -239,8 +239,15 @@ void rsa_encrypt(RSA_KEY* K, char* inBuf, size_t len, char* outBuf)
 	 
 	 
 	 mpz_powm(ciphertext, m, K->e, K->n); //c=m^e mod n
+	
+	 size_t size=0;
+	 Z2BYTES(ciphertext, &size, outBuf);
+	 printf("%ld\n", size);
+	 if (len-size>0){
+	 	memset(outBuf+size ,0, len-size);
+	}
 
-	 Z2BYTES(ciphertext, NULL, outBuf);
+	
 }
 
 void rsa_decrypt(RSA_KEY* K, char* outBuf, size_t outLen, char* inBuf, size_t inLen)
@@ -256,6 +263,9 @@ void rsa_decrypt(RSA_KEY* K, char* outBuf, size_t outLen, char* inBuf, size_t in
     char* buf=Z2BYTES(m, &buflen, NULL);
 
     memcpy(inBuf, buf, min(inLen, buflen)); //Don't want to overflow inBuf
+    if (buflen < inLen){
+	    memset(inBuf+buflen, 0, inLen-buflen);
+    }
     free(buf);
 }
 
