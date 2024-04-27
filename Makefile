@@ -14,7 +14,7 @@ LDADD    := -lpthread -lcrypto -lgmp -lm $(shell pkg-config --libs gtk+-3.0)
 INCLUDE  := $(shell pkg-config --cflags gtk+-3.0)
 DEFS     := # -DLINUX
 
-TARGETS  := chat dh-example
+TARGETS  := chat
 
 IMPL := chat.o
 ifdef skel

@@ -109,18 +109,28 @@ gboolean _send_status_message(gpointer msg){
 }
 
 void send_status_message(char* message){
-	int length=strlen(message);
+	int message_length=strlen(message);
+
+	char* prefix="** Status: ";
+	int prefix_length=strlen(prefix);
+
+	char* suffix="** \n\n";
+	int suffix_length=strlen(suffix);
+
 	int size=0;
 
-	char* msg=malloc(8+length+3);
+	char* msg=malloc(prefix_length+message_length+suffix_length+1);
 
-	sprintf(msg, "Status: ");
-	size+=8;
+	memcpy(msg,prefix,prefix_length);
+	size+=prefix_length;
 
-	memcpy(msg+size, message, length);
-	size+=length;
+	memcpy(msg+size, message, message_length);
+	size+=message_length;
 
-	sprintf(msg+size,"\n\n%c",'\0');
+	memcpy(msg+size,suffix, suffix_length);
+	size+=suffix_length;
+
+	msg[size]='\0';
 
 	g_main_context_invoke_full(NULL, G_PRIORITY_DEFAULT, _send_status_message, (gpointer)msg, free);
 }
@@ -251,6 +261,7 @@ void* initClientNet(void*)
 		}
 
 		shutdownNetwork();
+		sleep(3);
 	}
 	
 	/* at this point, should be able to send/recv on sockfd */
@@ -601,7 +612,7 @@ static void buf_limit(GtkTextBuffer *buffer, GtkTextIter *location, gchar *text,
 
 int main(int argc, char *argv[])
 {
-	if (dh_init("params") != 0) {
+	if (dhInit("params") != 0) {
 		fprintf(stderr, "could not read DH params from file 'params'\n");
 		return 1;
 	}

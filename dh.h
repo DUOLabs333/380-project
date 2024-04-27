@@ -16,7 +16,7 @@ extern "C" {
 #endif
 /* NOTE: you must call init or initFromScratch before doing anything else. */
 /** Try to read q,p,g from a file: */
-int dh_init(const char* fname);
+int dhInit(const char* fname);
 /** Generate fresh Diffie Hellman parameters.  This is a somewhat
  * expensive computation, so it's best to save and reuse params.
  * Prints generated parameters to stdout. */
