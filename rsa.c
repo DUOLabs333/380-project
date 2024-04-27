@@ -242,7 +242,7 @@ void rsa_encrypt(RSA_KEY* K, char* inBuf, size_t len, char* outBuf)
 	
 	 size_t size=0;
 	 Z2BYTES(ciphertext, &size, outBuf);
-	 if(Z2SIZE(K->n)-size>0){
+	 if(Z2SIZE(K->n)-size>0){ //Padding --- I'm not sure it's needed, but it can't hurt
 		 memset(outBuf+size, 0, Z2SIZE(K->n)-size);
 	}
 }
@@ -260,7 +260,7 @@ void rsa_decrypt(RSA_KEY* K, char* outBuf, size_t outLen, char* inBuf, size_t in
     char* buf=Z2BYTES(m, &buflen, NULL);
 
     memcpy(inBuf, buf, min(inLen, buflen)); //Don't want to overflow inBuf
-    if (buflen < inLen){
+    if (buflen < inLen){ //Padding --- not sure if it's needed, but it doesn't hurt
 	    memset(inBuf+buflen, 0, inLen-buflen);
     }
     free(buf);

@@ -415,7 +415,7 @@ void clientSetup(){
 	NEWBUF(g_b_a, dh_p_len);
 	
 	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
-	printf("From server: %d\n", (int)enc_b_buf[0]);
+
 	NEWZ(g_b_a);
 	BYTES2Z(g_b_a_buf, g_b_a_buf_len, g_b_a);
 
@@ -465,7 +465,7 @@ void recieveMessages(){
 			pthread_exit(NULL);
 		}
 
-		sha256_hash(dec_buf, dec_buf_len, hash_buf);
+		sha256_hash(dec_buf, NUMLEN+MESSAGELEN, hash_buf);
 		if(memcmp(dec_buf+NUMLEN+MESSAGELEN, hash_buf, hash_buf_len)){
 			send_status_message("Hashes do not match...");
 			continue;
@@ -475,10 +475,10 @@ void recieveMessages(){
 			send_status_message("Counter values do not match");
 			continue;
 		}
-
+		
+		send_status_message("Message successfully recieved!");
 		show_new_message(dec_buf+NUMLEN, min(decodeInt(dec_buf), MESSAGELEN));
 		structs[YOURS].counter++;
-		send_status_message("Message successfully recieved!");
 
 	}
 
@@ -548,6 +548,7 @@ static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* dat
 			gtk_widget_grab_focus(w);
 
 			send_status_message("Message sent successfully!");
+			structs[MINE].counter++;
 		}
 
 	}
