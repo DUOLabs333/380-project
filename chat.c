@@ -333,7 +333,6 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 
 	NEWBUF(enc_b, Z2SIZE(yoursRSA->n)); //Every RSA encrypted message is as big as K->n
 	
-	printf("%d\n", enc_b_buf_len);
 	rsa_encrypt(yoursRSA, g_a_nonce_buf, g_a_nonce_buf_len, enc_b_buf); //Enc_{PkB}(g^a mod p || nonce)
 
 	sendMsg(enc_b_buf, enc_b_buf_len, 0);
@@ -681,7 +680,7 @@ int main(int argc, char *argv[])
 		}
 	}
 	size_t n_lower_bound=SETUPLEN+1;
-	pri
+
 	if (generate!=NULL){
 		rsa_generate_keys(generate,n_lower_bound);
 		exit(0);
