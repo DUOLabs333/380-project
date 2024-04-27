@@ -237,11 +237,14 @@ void rsa_encrypt(RSA_KEY* K, char* inBuf, size_t len, char* outBuf)
 	 NEWZ(m);
 	 BYTES2Z(inBuf, len, m);
 	 
-	 
+
 	 mpz_powm(ciphertext, m, K->e, K->n); //c=m^e mod n
 	
-	 Z2BYTES(ciphertext, NULL, outBuf);
-	
+	 size_t size=0;
+	 Z2BYTES(ciphertext, &size, outBuf);
+	 if(Z2SIZE(K->n)-size>0){
+		 memset(outBuf+size, 0, Z2SIZE(K->n)-size);
+	}
 }
 
 void rsa_decrypt(RSA_KEY* K, char* outBuf, size_t outLen, char* inBuf, size_t inLen)

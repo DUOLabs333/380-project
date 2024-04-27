@@ -240,15 +240,15 @@ void* initClientNet(void*)
 			error("ERROR opening socket");
 		if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0){
 			sprintf(status_string, "Failed to connect: %s", strerror(errno));
-			printf("%s",status_string);
-			send_status_message(status_string);
-			continue;
-		}
-		
-		pthread_create(&protocol_thread, 0, protocolMain,0);
-		pthread_join(protocol_thread, NULL);
 
-		send_status_message("Server has disconnected, trying to connect again...");
+			send_status_message(status_string);
+		}else{
+		
+			pthread_create(&protocol_thread, 0, protocolMain,0);
+			pthread_join(protocol_thread, NULL);
+
+			send_status_message("Server has disconnected, trying to connect again...");
+		}
 
 		shutdownNetwork();
 	}
@@ -317,7 +317,7 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 
 	}
 	
-	send_status_message("Recieved a HELLO");
+	send_status_message("Received a HELLO");
 
 	NEWZ(a); //Initialize new mpz_t
 	NEWZ(g_a);
@@ -355,11 +355,12 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 	NEWZ(g_b);
 	
 	char* g_b_buf=nonce_g_b_buf+NUMLEN;
-	char g_b_buf_len=dh_p_len;
-
+	int g_b_buf_len=dh_p_len;
+	
+		
 	BYTES2Z(g_b_buf, g_b_buf_len, g_b);
 	
-	rsa_encrypt(mineRSA, g_b_buf, g_b_buf_len, enc_b_buf); //Enc_{PkB}(g^b mod p)
+	rsa_encrypt(yoursRSA, g_b_buf, g_b_buf_len, enc_b_buf); //Enc_{PkB}(g^b mod p)
 
 	sendMsg(enc_b_buf, enc_b_buf_len,0 );
 	
@@ -414,12 +415,11 @@ void clientSetup(){
 	NEWBUF(g_b_a, dh_p_len);
 	
 	rsa_decrypt(mineRSA, enc_b_buf, enc_b_buf_len, g_b_a_buf, g_b_a_buf_len);
-	
+	printf("From server: %d\n", (int)enc_b_buf[0]);
 	NEWZ(g_b_a);
 	BYTES2Z(g_b_a_buf, g_b_a_buf_len, g_b_a);
 
 	if(mpz_cmp(g_b,g_b_a)){
-		printf("Mine g^b and yours g^b do not match. Disconnecting...\n");
 		send_status_message("Mine g^b and yours g^b do not match. Disconnecting...");
 		pthread_exit(NULL);
 	}
