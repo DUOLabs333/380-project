@@ -122,7 +122,7 @@ void send_status_message(char* message){
 
 	sprintf(msg+size,"\n\n%c",'\0');
 
-	g_main_context_invoke(NULL, _send_status_message, (gpointer)msg);
+	g_main_context_invoke_full(NULL, G_PRIORITY_DEFAULT, _send_status_message, (gpointer)msg, free);
 }
 
 gboolean _show_new_message(gpointer msg)
@@ -140,10 +140,10 @@ void show_new_message(char* message, int length){
 	char* msg=malloc(length+1);
 	memcpy(msg, message, length);
 	msg[length]='\0';
+	
 
-	g_main_context_invoke(NULL, _show_new_message, (gpointer)msg);
+g_main_context_invoke_full(NULL, G_PRIORITY_DEFAULT, _show_new_message, (gpointer)msg, free);
 
-	free(msg);
 }
 
 //End of GTK Text functions 
@@ -477,6 +477,7 @@ void recieveMessages(){
 		}
 		
 		send_status_message("Message successfully recieved!");
+
 		show_new_message(dec_buf+NUMLEN, min(decodeInt(dec_buf), MESSAGELEN));
 		structs[YOURS].counter++;
 
