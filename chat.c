@@ -77,7 +77,7 @@ static void tsappend(char* message, char** tagnames, int ensurenewline)
 {
 	GtkTextIter t0;
 	gtk_text_buffer_get_end_iter(tbuf,&t0);
-	size_t len = g_utf8_strlen(message,-1);
+	size_t len = strlen(message);
 	if (ensurenewline && message[len-1] != '\n')
 		message[len++] = '\n';
 	gtk_text_buffer_insert(tbuf,&t0,message,len);
@@ -537,7 +537,7 @@ static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* dat
 		gtk_text_buffer_get_start_iter(mbuf,&mstart);
 		gtk_text_buffer_get_end_iter(mbuf,&mend);
 		char* message = gtk_text_buffer_get_text(mbuf,&mstart,&mend,1);
-		size_t len = g_utf8_strlen(message,-1);
+		size_t len = strlen(message) ;
 
 		encodeInt(len, packet_buf); //Encode the length of the message
 		memcpy(packet_buf+NUMLEN, message, min(len, MESSAGELEN)); //Copy the message (however, to avoid overflow, copy at most MESSAGELEN bytes. We are not copying the NUL terminator, though so the other end needs to add it back to display it)
