@@ -204,8 +204,9 @@ void* initServerNet(void*)
 	send_status_message(status_string);
 
 	listen(listensock,1);
-	socklen_t clilen;
 	struct sockaddr_in  cli_addr;
+	socklen_t clilen=sizeof(cli_addr);
+
 
 	while(1){
 		sockfd = accept(listensock, (struct sockaddr *) &cli_addr, &clilen);
