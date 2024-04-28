@@ -459,7 +459,7 @@ unsigned long long decodeInt(char* buf){
 	unsigned long long val=0;
 
 	for(int i=0; i < NUMLEN; i++){
-		val |= (buf[i] << CHAR_BIT*i);
+		val |= ((unsigned char)(buf[i]) << CHAR_BIT*i);
 	}
 
 	return val;
