@@ -597,7 +597,7 @@ void _strcpy(char** dst, char* src){
 
 static void buf_limit(GtkTextBuffer *buffer, GtkTextIter *location, gchar *text, gint len, gpointer user_data)
   { //Should limit length of characters you can type in.
-    static int i=1;
+    //static int i=1;
     gint count=gtk_text_buffer_get_char_count(buffer);
     //g_print("%i Chars %i\n", i++, count);
     if(count>MESSAGELEN)
