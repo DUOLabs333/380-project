@@ -603,7 +603,7 @@ static void buf_limit(GtkTextBuffer *buffer, GtkTextIter *location, gchar *text,
     if(count>MESSAGELEN)
       {
         GtkTextIter offset, end;
-        gtk_text_buffer_get_iter_at_offset(buffer, &offset, 10);
+        gtk_text_buffer_get_iter_at_offset(buffer, &offset, MESSAGELEN);
         gtk_text_buffer_get_end_iter(buffer, &end);
         //g_print("Remove Range %i %i\n", gtk_text_iter_get_offset(&offset), gtk_text_iter_get_offset(&end));
         gtk_text_buffer_delete(buffer, &offset, &end);
