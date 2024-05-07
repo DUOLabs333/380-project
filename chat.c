@@ -287,7 +287,6 @@ int shutdownNetwork()
 int isclient = 1;
 int issetup=0;
 
-int keylen;
 unsigned char* keybuf;
 
 #define HASHLEN 32
@@ -376,8 +375,12 @@ void serverSetup(){ //This is the setup protocol that will be performed by the s
 
 	sendMsg(enc_b_buf, enc_b_buf_len,0 );
 	
-	dhFinal(a, g_a, g_b, keybuf, min(dh_p_len, keylen));
+	NEWBUF(keybytes, dh_p_len);
+	dhFinal(a, g_a, g_b, (unsigned char*)keybytes_buf, keybytes_buf_len);
+
+	sha256_hash(keybytes_buf, keybytes_buf_len, (char*)keybuf, AES_KEY_LEN);
 	
+	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -438,9 +441,14 @@ void clientSetup(){
 	
 	NEWZ(g_a);
 	BYTES2Z(g_a_nonce_buf, dh_p_len, g_a);
-	dhFinal(b, g_b, g_a, keybuf, min(dh_p_len, keylen));
+
+	NEWBUF(keybytes, dh_p_len);
+	dhFinal(b, g_b, g_a, (unsigned char*)keybytes_buf, keybytes_buf_len);
+
+	sha256_hash(keybytes_buf, keybytes_buf_len, (char*)keybuf, AES_KEY_LEN);
 	
 
+	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
 	pthread_cleanup_pop(1);
@@ -477,7 +485,7 @@ void recieveMessages(){
 			pthread_exit(NULL);
 		}
 
-		sha256_hash(dec_buf, NUMLEN+MESSAGELEN, hash_buf);
+		sha256_hash(dec_buf, NUMLEN+MESSAGELEN, hash_buf, HASHLEN);
 		if(memcmp(dec_buf+NUMLEN+MESSAGELEN, hash_buf, hash_buf_len)){
 			send_status_message("Hashes do not match...");
 			continue;
@@ -543,7 +551,7 @@ static void sendMessage(GtkWidget* w /* <-- msg entry widget */, gpointer /* dat
 		encodeInt(len, packet_buf); //Encode the length of the message
 		memcpy(packet_buf+NUMLEN, message, min(len, MESSAGELEN)); //Copy the message (however, to avoid overflow, copy at most MESSAGELEN bytes. We are not copying the NUL terminator, though so the other end needs to add it back to display it)
 
-		sha256_hash(packet_buf, NUMLEN+MESSAGELEN, packet_buf+(packet_buf_len-(NUMLEN+HASHLEN))); //Hash the plaintext to ensure (plaintext) integrity
+		sha256_hash(packet_buf, NUMLEN+MESSAGELEN, packet_buf+(packet_buf_len-(NUMLEN+HASHLEN)), HASHLEN); //Hash the plaintext to ensure (plaintext) integrity
 		encodeInt(structs[MINE].counter, packet_buf+(packet_buf_len-(NUMLEN))); //Encode the message counter
 
 		aes_encrypt((unsigned char*)keybuf, (unsigned char*)packet_buf, packet_buf_len, (unsigned char *)send_buf); //Encrypt message
@@ -619,9 +627,9 @@ int main(int argc, char *argv[])
 	}
 	
 	//Initialization of global objects
-	keylen=AES_KEY_LEN;
-	keybuf=malloc(keylen);
-	memset(keybuf, 0, keylen);
+
+	keybuf=malloc(AES_KEY_LEN);
+	memset(keybuf, 0, AES_KEY_LEN);
 	
 	pthread_mutex_init(&send_message_mutex, NULL);
 
