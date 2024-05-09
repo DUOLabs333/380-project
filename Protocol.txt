@@ -57,9 +57,23 @@ With all of that out of the way, let's finally move on to describe the actual pr
 
 	5. Bob receives the messages, decrypts them to obtain g^b mod p, checks whether the g^b mod p matches, computes sk=((g^a) mod p)^b. Now, a secret key has been setup, completing the "setup" phase.
 
-	*NOTE*: If at any time during the setup protocol, any of the checks fail, the correspondent quits immediately (ie, for Alice, it goes back into "listening" mode, and for Bob, the client actually quits).
+	*NOTE*:
+		If at any time during the setup protocol, any of the checks fail, the correspondent quits immediately (ie, for Alice, it goes back into "listening" mode, and for Bob, the client actually quits).
 
-	*NOTE*: Almost all of this setup can be done by the functions provided in dh.h
+	*NOTE*:
+		Almost all of this setup can be done by the functions provided in dh.h
+
+	*NOTE*: 
+		At the time that the protocol was designed, I was unaware that the professor already provided a PKI primitive in the form of keys.c. In keys.c, DH was used instead of RSA. However, since the protocol was already designed by the time I noticed keys.c, it is too late to change that part of the setup protocol. 
+
+		However, if I was redesign the protocol, I certainly would have chosen to use keys.c directly.
+
+		The (unrealized) benefits of using keys.c over hand-rolled RSA would have been two-fold:
+			One, I would not have to reimplement RSA from scratch (while I did have the option to use OpenSSL's RSA facilities, they were too confusing for me to figure out completely, so I elected to just do it myself --- especially since I could just copy some of my code from Project 1); and (more importantly)
+
+			Two, the length of the message would no longer depend on the size of the public key --- I could have simply used the derived DH key as an AES key, allowing for messages of arbitrary length. This would also help keep the generation time of the initial PKI constant, since the component keys no longer have to be of a certain length. 
+
+
 
 	At this point, Alice and Bob are in "message mode", as they will now use the generated secret key to encrypt messages using the AES symmetric scheme.
 		AES is used as it has a mode that preserves byte-level message length.
@@ -84,9 +98,21 @@ With all of that out of the way, let's finally move on to describe the actual pr
 
 	At this point, the process repeats until one of the correspondents disconnects.
 
-	*NOTE*: If at any point during messaging, a check fails, the correspondent silently ignores the message --- if Mal knows that her message caused an error, it is possible that she can use it to figure out something about sk.
+	*NOTE*:
+		If at any point during messaging, a check fails, the correspondent silently ignores the message --- if Mal knows that her message caused an error, it is possible that she can use it to figure out something about sk.
 
-	An eagle-eyed reader may notice we are MAC-then-encrypting, which is almost universally denounced as bad security, as it opens one up to an timing-oracle attack. However, this (should) does not apply here, as nothing is sent back over the connection, regardless of the success of decrypting. Therefore, there's nothing Mal can use to conclude whether her forged message was valid or not.
+	An eagle-eyed reader may notice we are MAC-then-encrypt-ing, which is almost universally denounced as bad security, as it opens one up to an timing-oracle attack. However, this (should) does not apply here, as nothing is sent back over the connection, regardless of the success of decrypting. Therefore, there's nothing Mal can use to conclude whether her forged message was valid or not.
+
+	Another possible issue is that the message format has some "cribs" baked into the design that could potentially be used in a partial plaintext attack --- 
+		Since the "mine" part is (currently) deterministic, if Mal keeps track of the sequence of messages, she can trivially determine the value of the last 8 bytes of the plaintext.
+
+		Additionally, since the "len" part must decode to an integer <= 4096, this also limits the number of possible values for the first 8 bytes of the plaintext.
+
+		To mitigate this problem, instead of doing only one key negotiation and using the resulting ephemeral key for the entire subsequent conversation; for each new message from either correspondent, a new key negotiation is performed, and the resulting key is used just for that message. 
+			This prevents Mal from accumulating enough messages to run a known-plaintext attack. This also has the added benefit of strengthening the forward secrecy of the protocol.
+
+
+
 
 The length of the messages a correspondent can send is limited to avoid Mal (or a malicious correspondent) from DDosing a correspondent by sending a long enough message to cause them to run out of memory.
 	Luckily, even though the length of an individual message is limited, this can be built on top of to allow for sending messages of arbitrary length: A message is delimited when len(message) for one "packet" < 4096.
