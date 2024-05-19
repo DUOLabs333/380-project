@@ -1,4 +1,4 @@
-NOTE: The analysis was specifically on the source code located [here](https://github.com/Nieves350/Projects-), on branch `CSC-380`, commit 3fb3040.
+NOTE: The analysis was specifically on the source code located [here](https://github.com/Nieves350/Projects-), on branch `CSC-380`, commit 3fb304042145dd7cefdf7ab3333100eeb34a7372. We swapped with Matthew Nieves.
 
 We'll start the analysis by noting that the program, in its current form, fails to function correctly as a chat program, let alone a chat program that uses encryption correctly --- while the project does compile, and the server and client do start up correctly, trying to either send or receive a message results in an immediate segfault. In the spirit of transparency, it should also be noted that this flaw is acknowledged in the README of the project.
 
